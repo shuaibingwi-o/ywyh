@@ -5,9 +5,7 @@ package spf
 
 import (
 	"container/heap"
-	"encoding/json"
 	"errors"
-	"io/ioutil"
 	"math"
 	"os"
 	"sync"
@@ -195,83 +193,6 @@ var GlobalLSDB = NewLSDB()
 // GetGlobalLSDB returns the singleton GlobalLSDB instance.
 func GetGlobalLSDB() *LSDB {
 	return GlobalLSDB
-}
-
-// ==================== 持久化功能 ====================
-
-// SaveJSON 保存LSDB到JSON文件
-func SaveJSON(filename string, db *LSDB) error {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
-	// 序列化数据
-	data, err := json.MarshalIndent(db, "", "  ")
-	if err != nil {
-		return err
-	}
-
-	// 写入文件
-	return ioutil.WriteFile(filename, data, 0644)
-}
-
-// LoadJSON 从JSON文件加载LSDB
-func LoadJSON(filename string, db *LSDB) error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-
-	// 读取文件
-	data, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return err
-	}
-
-	// 反序列化到临时结构体
-	tempDB := &LSDB{}
-	if err := json.Unmarshal(data, tempDB); err != nil {
-		return err
-	}
-
-	// 复制数据到目标LSDB
-	db.Nodes = tempDB.Nodes
-	db.Links = tempDB.Links
-
-	// 重建拓扑关系
-	db.Topology = make(map[uint32]map[uint32]string)
-	for _, link := range db.Links {
-		if db.Topology[link.SrcNode] == nil {
-			db.Topology[link.SrcNode] = make(map[uint32]string)
-		}
-		db.Topology[link.SrcNode][link.DstNode] = link.InfId
-
-		// 如果是双向链路，添加反向拓扑
-		if link.Status {
-			if db.Topology[link.DstNode] == nil {
-				db.Topology[link.DstNode] = make(map[uint32]string)
-			}
-			db.Topology[link.DstNode][link.SrcNode] = link.InfId
-		}
-	}
-
-	// 重建节点的邻居信息
-	for _, node := range db.Nodes {
-		node.Neighbors = make(map[uint32]string)
-	}
-
-	for srcNodeID, targets := range db.Topology {
-		for dstNodeID, linkID := range targets {
-			if srcNode, exists := db.Nodes[srcNodeID]; exists {
-				srcNode.Neighbors[dstNodeID] = linkID
-			}
-			if dstNode, exists := db.Nodes[dstNodeID]; exists {
-				// 如果是双向链路，添加反向邻居
-				if link, exists := db.Links[linkID]; exists && link.Status {
-					dstNode.Neighbors[srcNodeID] = linkID
-				}
-			}
-		}
-	}
-
-	return nil
 }
 
 // SaveLSDB persists the provided LSDB to a JSON file (`lsdb.json`).
