@@ -19,7 +19,7 @@ type pathAttribute struct {
 type BGPUpdateMessage struct {
 	marker       [16]byte
 	len          uint16
-	myType       uint8
+	selfType     uint8
 	wrEntriesLen uint16
 	wrEntries    []ipPrefix
 	pathAttrsLen uint16
