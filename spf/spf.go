@@ -1,3 +1,6 @@
+// Package spf implements a small SRv6 path conversion pipeline.
+// It consumes BGP update messages, consults the LSDB, and emits
+// SRv6 path representations.
 package spf
 
 import (
@@ -5,6 +8,7 @@ import (
 )
 
 // Spf receives BGPUpdateMessage on `BgpUpdates` and emits SRv6Paths on `SrPaths`.
+// Spf runs a small conversion pipeline: receive updates, convert, emit.
 type Spf struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -23,7 +27,7 @@ func NewSpf(bufIn, bufOut int) *Spf {
 	}
 }
 
-// Start runs the processing loop in a goroutine.
+// Start runs the processing loop in a goroutine and begins handling updates.
 func (s *Spf) Start() {
 	go func() {
 		for {
@@ -50,12 +54,13 @@ func (s *Spf) Start() {
 	}()
 }
 
-// Stop stops the process loop and cancels context.
+// Stop stops the Spf processing loop and cancels its context.
 func (s *Spf) Stop() {
 	s.cancel()
 }
 
-// convertBGPToSRv6Paths creates a minimal SRv6Paths from a BGPUpdateMessage.
+// convertBGPToSRv6Paths converts a BGPUpdateMessage into a minimal
+// SRv6Paths structure, using the GlobalLSDB to populate ERO submodules.
 func convertBGPToSRv6Paths(m *BGPUpdateMessage) SRv6Paths {
 	var sp SRv6Paths
 	// Set srpID from message length as a simple identifier.

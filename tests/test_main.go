@@ -1,3 +1,5 @@
+// Small test runner used during development to exercise packages in this
+// repository. This file is a convenience helper and not part of the core API.
 package main
 
 import (

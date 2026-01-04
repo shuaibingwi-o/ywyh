@@ -1,3 +1,4 @@
+// Package spf provides small helpers for file I/O used by the LSDB.
 package spf
 
 import (
