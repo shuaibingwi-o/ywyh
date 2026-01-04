@@ -69,9 +69,8 @@ func convertBGPToSRv6Paths(m *BGPUpdateMessage) SRv6Paths {
 	// Use the global LSDB to populate LSP/ERO info.
 	db := GetGlobalLSDB()
 	db.mu.RLock()
-	// number of links -> use as lsp length (minimal semantics)
+	// number of links -> determine reported lsp length (capped for large DBs)
 	linkCount := len(db.Links)
-	sp.lspObj.header.length = uint16(linkCount)
 
 	// Build a small ero submodule per link (limited to avoid huge messages)
 	max := 16
@@ -99,6 +98,8 @@ func convertBGPToSRv6Paths(m *BGPUpdateMessage) SRv6Paths {
 		subs = append(subs, sl)
 		i++
 	}
+	// report the LSP length as the number of submodules attached (capped)
+	sp.lspObj.header.length = uint16(len(subs))
 	sp.eroObj.submodules = subs
 	db.mu.RUnlock()
 
