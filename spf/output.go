@@ -122,3 +122,10 @@ type ipv6Subobject struct {
 	prefixLen uint8
 	flags     uint8
 }
+
+type SRv6Paths struct {
+	header pceHeader
+	srpObj srpObject
+	lspObj lspObject
+	eroObj eroObject
+}
