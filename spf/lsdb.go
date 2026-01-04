@@ -197,8 +197,8 @@ func GetGlobalLSDB() *LSDB {
 
 // SaveLSDB persists the provided LSDB to a JSON file (`lsdb.json`).
 func SaveLSDB(db *LSDB) {
-	// Persist LSDB to `lsdb.json` in the current working directory.
-	if err := SaveJSON("lsdb.json", db); err != nil {
+	// Persist LSDB to `config/lsdb.json` in the current working directory.
+	if err := SaveJSON("config/lsdb.json", db); err != nil {
 		// 可以添加日志记录
 		// log.Printf("Failed to save LSDB: %v", err)
 	}
@@ -208,7 +208,7 @@ func SaveLSDB(db *LSDB) {
 // On error it returns an empty LSDB.
 func LoadLSDB() *LSDB {
 	db := NewLSDB()
-	if err := LoadJSON("lsdb.json", db); err != nil {
+	if err := LoadJSON("config/lsdb.json", db); err != nil {
 		return db
 	}
 	return db

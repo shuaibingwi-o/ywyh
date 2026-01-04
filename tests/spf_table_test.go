@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -21,6 +22,14 @@ func TestSpfTableDriven(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			// Isolate filesystem for each subtest to avoid persisted lsdb.json
+			tmp := t.TempDir()
+			oldwd, _ := os.Getwd()
+			defer os.Chdir(oldwd)
+			if err := os.Chdir(tmp); err != nil {
+				t.Fatalf("chdir failed: %v", err)
+			}
+
 			spf.GlobalLSDB = spf.NewLSDB()
 			for i := 0; i < tc.links; i++ {
 				id := fmt.Sprintf("lnk%d", i)

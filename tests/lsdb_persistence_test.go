@@ -29,10 +29,10 @@ func TestLSDBSaveLoad(t *testing.T) {
 	// save to lsdb.json
 	spf.SaveLSDB(db)
 
-	// ensure file exists
-	fpath := filepath.Join(tmp, "lsdb.json")
+	// ensure file exists under config/lsdb.json
+	fpath := filepath.Join(tmp, "config", "lsdb.json")
 	if _, err := os.Stat(fpath); err != nil {
-		t.Fatalf("lsdb.json not found: %v", err)
+		t.Fatalf("config/lsdb.json not found: %v", err)
 	}
 
 	// load and verify contents

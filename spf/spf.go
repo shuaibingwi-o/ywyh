@@ -5,6 +5,7 @@ package spf
 
 import (
 	"context"
+	"os"
 )
 
 // Spf receives BGPUpdateMessage on `BgpUpdates` and emits SRv6Paths on `SrPaths`.
@@ -29,6 +30,16 @@ func NewSpf(bufIn, bufOut int) *Spf {
 
 // Start runs the processing loop in a goroutine and begins handling updates.
 func (s *Spf) Start() {
+	// If a persisted LSDB is present in the current working directory
+	// under the `config` directory, load it so the pipeline starts with persisted state.
+	if _, err := os.Stat("config/lsdb.json"); err == nil {
+		// Only load persisted LSDB if the current GlobalLSDB appears empty,
+		// so tests that set up an in-memory LSDB aren't overridden.
+		if GlobalLSDB == nil || (len(GlobalLSDB.Links) == 0 && len(GlobalLSDB.Nodes) == 0) {
+			GlobalLSDB = LoadLSDB()
+		}
+	}
+
 	go func() {
 		for {
 			select {
@@ -56,7 +67,9 @@ func (s *Spf) Start() {
 
 // Stop stops the Spf processing loop and cancels its context.
 func (s *Spf) Stop() {
+	// Stop processing first, then persist the LSDB to disk.
 	s.cancel()
+	SaveLSDB(GetGlobalLSDB())
 }
 
 // convertBGPToSRv6Paths converts a BGPUpdateMessage into a minimal
