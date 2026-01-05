@@ -43,11 +43,14 @@ func TestSpfE2E_LoadAndSaveLSDB(t *testing.T) {
 
 	select {
 	case p := <-s.SrPaths:
-		if p.SRPID() != uint32(99) {
-			t.Fatalf("unexpected SRP ID: %d", p.SRPID())
+		if p == nil {
+			t.Fatal("received nil PCUpd")
+		}
+		if p.SRPID != uint32(99) {
+			t.Fatalf("unexpected SRP ID: %d", p.SRPID)
 		}
 	case <-time.After(1 * time.Second):
-		t.Fatal("timeout waiting for SRv6Paths")
+		t.Fatal("timeout waiting for PCUpd")
 	}
 
 	// Stop should save the current GlobalLSDB to lsdb.json
