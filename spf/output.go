@@ -3,6 +3,10 @@
 // for inter-component messaging within this project.
 package spf
 
+import (
+	"github.com/nttcom/pola/pkg/packet/pcep"
+)
+
 // Rep:   |Header|RP|NOPATH|LSPA|Bandwidth|Metric|IRO[|ERO|LSPA|Bandwidth|Metric|IRO|]
 // https://datatracker.ietf.org/doc/html/rfc5440#section-6.5
 
@@ -154,4 +158,9 @@ type SRv6Paths struct {
 	srpObj srpObject
 	lspObj lspObject
 	eroObj eroObject
+	// RawPCEP holds the corresponding PCEP/PCUpd external object from the
+	// imported PCEP package.
+	RawPCEP *pcep.PCEP
+	// BGPUpdate references the originating BGP update that produced these SRv6 paths.
+	BGPUpdate *BGPUpdateMessage
 }
