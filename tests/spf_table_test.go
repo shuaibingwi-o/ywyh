@@ -44,11 +44,14 @@ func TestSpfTableDriven(t *testing.T) {
 
 			select {
 			case p := <-s.SrPaths:
-				if p.LSPLength() != tc.wantLsp {
-					t.Fatalf("got lsp length %d want %d", p.LSPLength(), tc.wantLsp)
+				if p == nil {
+					t.Fatal("received nil PCUpd")
+				}
+				if p.LSPLen != tc.wantLsp {
+					t.Fatalf("got lsp length %d want %d", p.LSPLen, tc.wantLsp)
 				}
 			case <-time.After(500 * time.Millisecond):
-				t.Fatal("timeout waiting for SRv6Paths")
+				t.Fatal("timeout waiting for PCUpd")
 			}
 		})
 	}

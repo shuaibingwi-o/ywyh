@@ -24,13 +24,16 @@ func TestSpfPipelineMovedToTests(t *testing.T) {
 		if !ok {
 			t.Fatal("SrPaths channel closed unexpectedly")
 		}
-		if sp.SRPID() != uint32(123) {
-			t.Fatalf("unexpected srpID: got %d want %d", sp.SRPID(), 123)
+		if sp == nil {
+			t.Fatal("received nil PCUpd")
 		}
-		if sp.LSPLength() != uint16(len(spf.GlobalLSDB.Links)) {
-			t.Fatalf("unexpected lsp length: got %d want %d", sp.LSPLength(), len(spf.GlobalLSDB.Links))
+		if sp.SRPID != uint32(123) {
+			t.Fatalf("unexpected srpID: got %d want %d", sp.SRPID, 123)
+		}
+		if sp.LSPLen != uint16(len(spf.GlobalLSDB.Links)) {
+			t.Fatalf("unexpected lsp length: got %d want %d", sp.LSPLen, len(spf.GlobalLSDB.Links))
 		}
 	case <-time.After(1 * time.Second):
-		t.Fatal("timeout waiting for SRv6Paths")
+		t.Fatal("timeout waiting for PCUpd")
 	}
 }

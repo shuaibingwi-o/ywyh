@@ -1,0 +1,24 @@
+{
+  "nodes": {},
+  "links": {
+    "lnk1": {
+      "infId": "lnk1",
+      "loss": 0,
+      "delay": 0,
+      "status": false,
+      "sid": ""
+    },
+    "lnk2": {
+      "infId": "lnk2",
+      "loss": 0,
+      "delay": 0,
+      "status": false,
+      "sid": ""
+    }
+  },
+  "topology": {
+    "0": {
+      "0": "lnk2"
+    }
+  }
+}

@@ -24,8 +24,12 @@ func main() {
 
 	select {
 	case p := <-s.SrPaths:
-		fmt.Printf("SRP ID=%d LSP length=%d\n", p.SRPID(), p.LSPLength())
+		if p == nil || p.Raw == nil {
+			fmt.Println("received nil PCEP message")
+		} else {
+			fmt.Println("received PCEP message")
+		}
 	case <-time.After(1 * time.Second):
-		fmt.Println("timeout waiting for SRv6Paths")
+		fmt.Println("timeout waiting for PCUpd")
 	}
 }
