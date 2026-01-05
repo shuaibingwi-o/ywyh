@@ -5,7 +5,10 @@ package spf
 
 import (
 	"context"
+	"encoding/binary"
 	"os"
+
+	"github.com/nttcom/pola/pkg/packet/pcep"
 )
 
 // Spf receives BGPUpdateMessage on `BgpUpdates` and emits SRv6Paths on `SrPaths`.
@@ -14,7 +17,8 @@ type Spf struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	BgpUpdates chan BGPUpdateMessage
-	SrPaths    chan SRv6Paths
+	// SrPaths now carries the generated PCEP messages only.
+	SrPaths chan *pcep.PCEP
 }
 
 // NewSpf creates a new Spf with the provided buffer sizes for channels.
@@ -24,7 +28,7 @@ func NewSpf(bufIn, bufOut int) *Spf {
 		ctx:        ctx,
 		cancel:     cancel,
 		BgpUpdates: make(chan BGPUpdateMessage, bufIn),
-		SrPaths:    make(chan SRv6Paths, bufOut),
+		SrPaths:    make(chan *pcep.PCEP, bufOut),
 	}
 }
 
@@ -51,14 +55,16 @@ func (s *Spf) Start() {
 					close(s.SrPaths)
 					return
 				}
-				// Convert and send SRv6Paths (best-effort, non-blocking when possible)
+				// Convert and send the generated PCEP only (best-effort, non-blocking).
 				sp := convertBGPToSRv6Paths(&m)
-				select {
-				case s.SrPaths <- sp:
-				case <-s.ctx.Done():
-					close(s.SrPaths)
-					return
-				default:
+				if sp.RawPCEP != nil {
+					select {
+					case s.SrPaths <- sp.RawPCEP:
+					case <-s.ctx.Done():
+						close(s.SrPaths)
+						return
+					default:
+					}
 				}
 			}
 		}
@@ -81,6 +87,27 @@ func convertBGPToSRv6Paths(m *BGPUpdateMessage) SRv6Paths {
 
 	// Use the global LSDB to populate LSP/ERO info.
 	db := GetGlobalLSDB()
+	// Update LSDB with any NLRI entries in the BGP update: create nodes.
+	// We take a conservative approach: derive a node ID from the NLRI IP
+	// (IPv4 -> 4 bytes; IPv6 -> low 4 bytes) and add a lightweight Node.
+	if m != nil {
+		for _, nl := range m.nlriEntries {
+			var nodeID uint32
+			if nl.ip.To4() != nil {
+				b := nl.ip.To4()
+				nodeID = binary.BigEndian.Uint32(b)
+			} else if len(nl.ip) >= 16 {
+				nodeID = binary.BigEndian.Uint32(nl.ip[len(nl.ip)-4:])
+			}
+			if nodeID != 0 {
+				// ensure node exists
+				if _, ok := db.GetNode(nodeID); !ok {
+					db.AddNode(&Node{RouterId: nodeID, Locator: nl.ip.String()})
+				}
+			}
+		}
+	}
+
 	db.mu.RLock()
 	// number of links -> determine reported lsp length (capped for large DBs)
 	linkCount := len(db.Links)
@@ -114,7 +141,53 @@ func convertBGPToSRv6Paths(m *BGPUpdateMessage) SRv6Paths {
 	// report the LSP length as the number of submodules attached (capped)
 	sp.lspObj.header.length = uint16(len(subs))
 	sp.eroObj.submodules = subs
+
+	// If the BGP update contains at least two NLRI entries, attempt to
+	// compute a shortest path between the first and last NLRI-derived nodes
+	// and replace the ERO submodules with the path-specific list.
+	if m != nil && len(m.nlriEntries) >= 2 {
+		// derive src and dst node IDs the same way as above
+		var srcID, dstID uint32
+		if m.nlriEntries[0].ip.To4() != nil {
+			srcID = binary.BigEndian.Uint32(m.nlriEntries[0].ip.To4())
+		} else if len(m.nlriEntries[0].ip) >= 16 {
+			srcID = binary.BigEndian.Uint32(m.nlriEntries[0].ip[len(m.nlriEntries[0].ip)-4:])
+		}
+		last := m.nlriEntries[len(m.nlriEntries)-1]
+		if last.ip.To4() != nil {
+			dstID = binary.BigEndian.Uint32(last.ip.To4())
+		} else if len(last.ip) >= 16 {
+			dstID = binary.BigEndian.Uint32(last.ip[len(last.ip)-4:])
+		}
+
+		if srcID != 0 && dstID != 0 {
+			// compute path using default metric (delay)
+			if pathRes, err := db.CalculatePath(srcID, dstID, MetricDelay); err == nil {
+				// build submodules from pathRes.Links
+				psubs := make([]srEROSubobject, 0, len(pathRes.Links))
+				for _, linkID := range pathRes.Links {
+					if lk, ok := db.GetLink(linkID); ok {
+						sid := []byte(lk.Sid)
+						sl := srEROSubobject{selfType: 1, length: uint8(len(sid)), flags: 0, sid: sid}
+						// attach adjacency metadata if available
+						if lk != nil {
+							sl.adj = []linkLocalAdj{{inf: lk.SrcNode}}
+						}
+						psubs = append(psubs, sl)
+					}
+				}
+				if len(psubs) > 0 {
+					sp.lspObj.header.length = uint16(len(psubs))
+					sp.eroObj.submodules = psubs
+				}
+			}
+		}
+	}
+
 	db.mu.RUnlock()
+
+	// Attach the originating BGP update for consumers' reference.
+	sp.BGPUpdate = m
 
 	return sp
 }

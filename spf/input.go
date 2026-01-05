@@ -3,6 +3,8 @@ package spf
 
 import (
 	"net"
+
+	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
 // ipPrefix represents a network prefix (address + prefix length).
@@ -52,6 +54,8 @@ type BGPUpdateMessage struct {
 	pathAttrsLen uint16
 	pathAttrs    []pathAttribute
 	nlriEntries  []ipPrefix
+	// RawBgp holds the parsed external BGP message from GoBGP.
+	RawBgp *bgp.BGPMessage
 }
 
 // AddNLRIObj appends an exported NLRI to the internal NLRI list.

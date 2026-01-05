@@ -1,1 +1,8 @@
-# intentionally empty - recreated by assistant
+github.com/nttcom/pola v1.3.1 h1:1whrdRweqOIB/eVi1Yw9ouNJ2myC4vT1l/c6cyCsLxI=
+github.com/nttcom/pola v1.3.1/go.mod h1:UpW4GH6XEmqHjh5vjMVysTU9R6ibI+xh0iBtgLuuiuA=
+github.com/osrg/gobgp/v4 v4.2.0 h1:MVh/yn6gjJ53YmkYQBrxWTwvhZxHBafy1uj1Pyt05rU=
+github.com/osrg/gobgp/v4 v4.2.0/go.mod h1:1a0YiXMuyRPqcCX+fkXZ2UUtcOnUxAWynFunUOSZepk=
+go.uber.org/multierr v1.10.0 h1:S0h4aNzvfcFsC3dRF1jLoaov7oRaKqRGC/pUEJ2yvPQ=
+go.uber.org/multierr v1.10.0/go.mod h1:20+QtiLqy0Nd6FdQB9TLXag12DsQkrbs3htMFfDN80Y=
+go.uber.org/zap v1.27.1 h1:08RqriUEv8+ArZRYSTXy1LeBScaMpVSTBhCeaZYfMYc=
+go.uber.org/zap v1.27.1/go.mod h1:GB2qFLM7cTU87MWRP2mPIjqfIDnGu+VIO4V/SdhGo2E=
