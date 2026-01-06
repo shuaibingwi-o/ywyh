@@ -1,5 +1,6 @@
 # Ignore local LSDB state
 config/lsdb.json
+tests/config/lsdb.json
 
 # Ignore editor temp files
 *.swp
