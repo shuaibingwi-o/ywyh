@@ -1,3 +1,12 @@
+// SPDX-License-Identifier: http://www.apache.org/licenses/LICENSE-2.0
+/*
+ *
+ * Copyright (C) 2026 , Inc.
+ *
+ * Authors:
+ *
+ */
+
 // Package tests contains small integration tests driving helper functions
 // in the `spf` package.
 package tests

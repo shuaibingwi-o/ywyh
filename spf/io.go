@@ -1,3 +1,12 @@
+// SPDX-License-Identifier: http://www.apache.org/licenses/LICENSE-2.0
+/*
+ *
+ * Copyright (C) 2026 , Inc.
+ *
+ * Authors:
+ *
+ */
+
 // Package spf provides small helpers for file I/O used by the LSDB.
 package spf
 

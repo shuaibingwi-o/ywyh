@@ -1,6 +1,14 @@
+// SPDX-License-Identifier: http://www.apache.org/licenses/LICENSE-2.0
+/*
+ *
+ * Copyright (C) 2026 , Inc.
+ *
+ * Authors:
+ *
+ */
+
 // Package spf contains a simple Link State Database (LSDB) representation
-// used by the SPF pipeline. The LSDB is intentionally minimal for
-// demonstration and testing purposes.
+// used by the local Path Computation Engine(PCE).
 package spf
 
 import (

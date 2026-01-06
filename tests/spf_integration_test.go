@@ -1,12 +1,18 @@
+// SPDX-License-Identifier: http://www.apache.org/licenses/LICENSE-2.0
+/*
+ *
+ * Copyright (C) 2026 , Inc.
+ *
+ * Authors:
+ *
+ */
+
 package tests
 
 import (
 	"testing"
-	"time"
 
 	"ywyh/spf"
-
-	"github.com/nttcom/pola/pkg/packet/pcep"
 )
 
 func TestSpfPipelineMovedToTests(t *testing.T) {
@@ -18,23 +24,10 @@ func TestSpfPipelineMovedToTests(t *testing.T) {
 	s.Start()
 	defer s.Stop()
 
-	// Do not rely on synthetic PCUpd emission; send a dummy message.
-	dummy := &pcep.PCUpdMessage{}
-	select {
-	case s.SrPaths <- dummy:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("timeout sending dummy PCUpd to SrPaths")
-	}
-
-	select {
-	case sp, ok := <-s.SrPaths:
-		if !ok {
-			t.Fatal("SrPaths channel closed unexpectedly")
-		}
-		if sp == nil {
-			t.Fatal("received nil PCEP message")
-		}
-	case <-time.After(1 * time.Second):
-		t.Fatal("timeout waiting for PCUpd")
+	// Directly call PackPCUpd with a BGP message carrying an SRP ID.
+	m := spf.NewBGPUpdate(123)
+	pc := spf.PackPCUpd(m)
+	if pc == nil {
+		t.Fatal("PackPCUpd returned nil")
 	}
 }

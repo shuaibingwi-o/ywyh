@@ -1,14 +1,20 @@
+// SPDX-License-Identifier: http://www.apache.org/licenses/LICENSE-2.0
+/*
+ *
+ * Copyright (C) 2026 , Inc.
+ *
+ * Authors:
+ *
+ */
+
 package tests
 
 import (
 	"fmt"
 	"os"
 	"testing"
-	"time"
 
 	"ywyh/spf"
-
-	"github.com/nttcom/pola/pkg/packet/pcep"
 )
 
 func TestSpfTableDriven(t *testing.T) {
@@ -45,20 +51,13 @@ func TestSpfTableDriven(t *testing.T) {
 			// Tests should not rely on synthetic PCUpd emission.
 			// Send a dummy PCEP message directly to the output channel
 			// and verify it can be received by consumers.
-			dummy := &pcep.PCUpdMessage{}
-			select {
-			case s.SrPaths <- dummy:
-			case <-time.After(200 * time.Millisecond):
-				t.Fatal("timeout sending dummy PCUpd to SrPaths")
-			}
-
-			select {
-			case p := <-s.SrPaths:
-				if p == nil {
-					t.Fatal("received nil PCEP message")
-				}
-			case <-time.After(500 * time.Millisecond):
-				t.Fatal("timeout waiting for PCUpd")
+			// Directly call PackPCUpd with a BGP message carrying an
+			// SRP identifier. This avoids depending on the internal
+			// event loop while still exercising output construction.
+			m := spf.NewBGPUpdate(7)
+			pc := spf.PackPCUpd(m)
+			if pc == nil {
+				t.Fatal("PackPCUpd returned nil")
 			}
 		})
 	}

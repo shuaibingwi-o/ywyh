@@ -1,13 +1,19 @@
+// SPDX-License-Identifier: http://www.apache.org/licenses/LICENSE-2.0
+/*
+ *
+ * Copyright (C) 2026 , Inc.
+ *
+ * Authors:
+ *
+ */
+
 package tests
 
 import (
 	"os"
 	"testing"
-	"time"
 
 	"ywyh/spf"
-
-	"github.com/nttcom/pola/pkg/packet/pcep"
 )
 
 // End-to-end test: when Spf.Start loads LSDB from disk, and Spf.Stop saves
@@ -42,22 +48,11 @@ func TestSpfE2E_LoadAndSaveLSDB(t *testing.T) {
 	// mutate the in-memory LSDB and send an update through the pipeline
 	spf.GlobalLSDB.AddLink(&spf.Link{InfId: "dynamic"})
 
-	// Do not rely on synthetic PCUpd emission; send a dummy message
-	// directly to the SrPaths channel and verify it is received.
-	dummy := &pcep.PCUpdMessage{}
-	select {
-	case s.SrPaths <- dummy:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("timeout sending dummy PCUpd to SrPaths")
-	}
-
-	select {
-	case p := <-s.SrPaths:
-		if p == nil {
-			t.Fatal("received nil PCEP message")
-		}
-	case <-time.After(1 * time.Second):
-		t.Fatal("timeout waiting for PCUpd")
+	// Directly call PackPCUpd with a BGP message carrying an SRP ID.
+	m := spf.NewBGPUpdate(99)
+	pc := spf.PackPCUpd(m)
+	if pc == nil {
+		t.Fatal("PackPCUpd returned nil")
 	}
 
 	// Stop should save the current GlobalLSDB to lsdb.json
