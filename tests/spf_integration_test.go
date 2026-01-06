@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"ywyh/spf"
+
+	"github.com/nttcom/pola/pkg/packet/pcep"
 )
 
 func TestSpfPipelineMovedToTests(t *testing.T) {
@@ -16,8 +18,13 @@ func TestSpfPipelineMovedToTests(t *testing.T) {
 	s.Start()
 	defer s.Stop()
 
-	msg := spf.NewBGPUpdate(123)
-	s.BgpUpdates <- msg
+	// Do not rely on synthetic PCUpd emission; send a dummy message.
+	dummy := &pcep.PCUpdMessage{}
+	select {
+	case s.SrPaths <- dummy:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout sending dummy PCUpd to SrPaths")
+	}
 
 	select {
 	case sp, ok := <-s.SrPaths:

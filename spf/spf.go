@@ -8,8 +8,6 @@ import (
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
-// Note: pipeline sends `*pcep.PCUpdMessage` values on `SrPaths` channel.
-
 // Spf holds the pipeline channels and context.
 type Spf struct {
 	ctx        context.Context
@@ -42,7 +40,7 @@ func (s *Spf) Start() {
 	go s.eventLoop()
 }
 
-// processLoop listens on the internal `BgpUpdates` channel, applies
+// eventLoop listens on the internal `BgpUpdates` channel, applies
 // updates to the LSDB, computes paths, packages PCUpd messages and
 // forwards them to `SrPaths` until the context is cancelled or the
 // channel is closed.
@@ -62,22 +60,10 @@ func (s *Spf) eventLoop() {
 			changed := ApplyBGPUpdateToLSDB(m)
 			var pcMsg *pcep.PCUpdMessage
 			if !changed {
-				// If the message is synthetic (has a registered SRP ID),
-				// emit a minimal PCUpdMessage reporting the current LSP
-				// length so tests and consumers can observe topology size.
-				if GetSRPID(m) != 0 {
-					db := GetGlobalLSDB()
-					lspLen := len(db.Links)
-					if lspLen > 16 {
-						lspLen = 16
-					}
-					pcMsg = NewPCUpd(GetSRPID(m), uint16(lspLen))
-				} else {
-					continue
-				}
-			} else {
-				pcMsg = PackPCUpd(m)
+				// Skip sending any PCUpd when the LSDB was not modified.
+				continue
 			}
+			pcMsg = PackPCUpd(m)
 			select {
 			case s.SrPaths <- pcMsg:
 			case <-s.ctx.Done():
@@ -86,10 +72,6 @@ func (s *Spf) eventLoop() {
 		}
 	}
 }
-
-// StartListener removed — external callers should send *bgp.BGPMessage
-// values directly into `s.BgpUpdates`. The internal `processLoop`
-// handles LSDB updates and PCUpd packaging.
 
 // Stop cancels processing and persists the LSDB.
 func (s *Spf) Stop() {

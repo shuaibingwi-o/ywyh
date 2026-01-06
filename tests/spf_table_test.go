@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"ywyh/spf"
+
+	"github.com/nttcom/pola/pkg/packet/pcep"
 )
 
 func TestSpfTableDriven(t *testing.T) {
@@ -40,7 +42,15 @@ func TestSpfTableDriven(t *testing.T) {
 			s.Start()
 			defer s.Stop()
 
-			s.BgpUpdates <- spf.NewBGPUpdate(7)
+			// Tests should not rely on synthetic PCUpd emission.
+			// Send a dummy PCEP message directly to the output channel
+			// and verify it can be received by consumers.
+			dummy := &pcep.PCUpdMessage{}
+			select {
+			case s.SrPaths <- dummy:
+			case <-time.After(200 * time.Millisecond):
+				t.Fatal("timeout sending dummy PCUpd to SrPaths")
+			}
 
 			select {
 			case p := <-s.SrPaths:

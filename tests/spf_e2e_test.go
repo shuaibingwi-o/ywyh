@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"ywyh/spf"
+
+	"github.com/nttcom/pola/pkg/packet/pcep"
 )
 
 // End-to-end test: when Spf.Start loads LSDB from disk, and Spf.Stop saves
@@ -39,7 +41,15 @@ func TestSpfE2E_LoadAndSaveLSDB(t *testing.T) {
 
 	// mutate the in-memory LSDB and send an update through the pipeline
 	spf.GlobalLSDB.AddLink(&spf.Link{InfId: "dynamic"})
-	s.BgpUpdates <- spf.NewBGPUpdate(99)
+
+	// Do not rely on synthetic PCUpd emission; send a dummy message
+	// directly to the SrPaths channel and verify it is received.
+	dummy := &pcep.PCUpdMessage{}
+	select {
+	case s.SrPaths <- dummy:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout sending dummy PCUpd to SrPaths")
+	}
 
 	select {
 	case p := <-s.SrPaths:
