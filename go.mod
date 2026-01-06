@@ -1,6 +1,6 @@
 module ywyh
 
-go 1.20
+go 1.25.5
 
 require (
 	github.com/nttcom/pola v1.3.1

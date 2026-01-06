@@ -45,14 +45,14 @@ func (s *Spf) Start() {
 	}
 	// Start the internal processing goroutine which listens on
 	// `s.BgpUpdates` and produces PCUpd messages to `s.SrPaths`.
-	go s.processLoop()
+	go s.eventLoop()
 }
 
 // processLoop listens on the internal `BgpUpdates` channel, applies
 // updates to the LSDB, computes paths, packages PCUpd messages and
 // forwards them to `SrPaths` until the context is cancelled or the
 // channel is closed.
-func (s *Spf) processLoop() {
+func (s *Spf) eventLoop() {
 	defer close(s.SrPaths)
 	for {
 		select {
@@ -65,7 +65,7 @@ func (s *Spf) processLoop() {
 			// First, apply the BGP update to the LSDB. If the update
 			// did not modify the LSDB, skip PCUpd construction and
 			// avoid sending a message to consumers.
-			changed := applyBGPUpdateToLSDB(m)
+			changed := ApplyBGPUpdateToLSDB(m)
 			var pc *PCUpd
 			if !changed {
 				// If the message is synthetic (has a registered SRP ID),

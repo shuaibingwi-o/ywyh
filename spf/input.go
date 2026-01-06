@@ -16,7 +16,7 @@ import (
 // ignored to avoid interfering with tests.
 // applyBGPUpdateToLSDB applies the provided BGP message to the
 // GlobalLSDB. It returns true if the LSDB was modified.
-func applyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
+func ApplyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
 	if m == nil {
 		return false
 	}

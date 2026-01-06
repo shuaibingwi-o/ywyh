@@ -20,15 +20,16 @@ func main() {
 	defer s.Stop()
 
 	msg := spf.NewBGPUpdate(42)
+	// send the parsed BGP message into the pipeline
 	s.BgpUpdates <- msg
 
 	select {
 	case p := <-s.SrPaths:
-		if p == nil || p.Raw == nil {
-			fmt.Println("received nil PCEP message")
-		} else {
-			fmt.Println("received PCEP message")
+		if p == nil {
+			fmt.Println("received nil PCUpd")
+			return
 		}
+		fmt.Printf("SRP ID=%d LSP len=%d\n", p.SRPID, p.LSPLen)
 	case <-time.After(1 * time.Second):
 		fmt.Println("timeout waiting for PCUpd")
 	}
