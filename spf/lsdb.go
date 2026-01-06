@@ -19,8 +19,8 @@ type Node struct {
 	Msd      uint8  `json:"msd"`
 	AsNum    uint32 `json:"asNum"`
 	Locator  string `json:"locator"`
-	// 添加邻居信息
-	Neighbors map[uint32]string `json:"neighbors,omitempty"` // 邻居节点ID -> 链路ID
+	// Neighbor information
+	Neighbors map[uint32]string `json:"neighbors,omitempty"` // neighbor node ID -> link ID
 	// SRv6 SIDs discovered for this node (if any)
 	SRv6SIDs []string `json:"srv6sids,omitempty"`
 }
@@ -28,22 +28,22 @@ type Node struct {
 // Link represents a network adjacency stored in the LSDB.
 type Link struct {
 	InfId     string  `json:"infId"`
-	SrcNode   uint32  `json:"srcNode,omitempty"`   // 源节点ID
-	DstNode   uint32  `json:"dstNode,omitempty"`   // 目标节点ID
-	Loss      float32 `json:"loss"`                // 丢包率 (0-1)
-	Delay     float32 `json:"delay"`               // 延迟 (毫秒)
-	Status    bool    `json:"status"`              // 链路状态
+	SrcNode   uint32  `json:"srcNode,omitempty"`   // source node ID
+	DstNode   uint32  `json:"dstNode,omitempty"`   // destination node ID
+	Loss      float32 `json:"loss"`                // packet loss rate (0-1)
+	Delay     float32 `json:"delay"`               // delay (ms)
+	Status    bool    `json:"status"`              // link status
 	Sid       string  `json:"sid"`                 // Segment ID
-	Bandwidth float32 `json:"bandwidth,omitempty"` // 带宽 (可选)
+	Bandwidth float32 `json:"bandwidth,omitempty"` // bandwidth (optional)
 }
 
-// LSDB数据结构
+// LSDB data structure
 type LSDB struct {
 	mu    sync.RWMutex
-	Nodes map[uint32]*Node `json:"nodes"` // 节点ID到节点对象的映射
-	Links map[string]*Link `json:"links"` // 链路ID到链路对象的映射
-	// 添加拓扑关系
-	Topology map[uint32]map[uint32]string `json:"topology,omitempty"` // 源节点->目标节点->链路ID
+	Nodes map[uint32]*Node `json:"nodes"` // mapping from node ID to Node
+	Links map[string]*Link `json:"links"` // mapping from link ID to Link
+	// Topology relationships
+	Topology map[uint32]map[uint32]string `json:"topology,omitempty"` // src node -> dst node -> link ID
 }
 
 // LSDBManager defines read-only access to an LSDB.
@@ -82,7 +82,7 @@ func (db *LSDB) AddLink(link *Link) {
 	defer db.mu.Unlock()
 	db.Links[link.InfId] = link
 
-	// 更新拓扑关系
+	// update topology
 	if db.Topology == nil {
 		db.Topology = make(map[uint32]map[uint32]string)
 	}
@@ -91,7 +91,7 @@ func (db *LSDB) AddLink(link *Link) {
 	}
 	db.Topology[link.SrcNode][link.DstNode] = link.InfId
 
-	// 更新节点的邻居信息
+	// update neighbor information for the source node
 	if srcNode, exists := db.Nodes[link.SrcNode]; exists {
 		if srcNode.Neighbors == nil {
 			srcNode.Neighbors = make(map[uint32]string)
@@ -99,7 +99,7 @@ func (db *LSDB) AddLink(link *Link) {
 		srcNode.Neighbors[link.DstNode] = link.InfId
 	}
 
-	// 如果是双向链路，也添加反向拓扑
+	// if the link is bidirectional, also add reverse topology
 	if link.Status {
 		if db.Topology[link.DstNode] == nil {
 			db.Topology[link.DstNode] = make(map[uint32]string)
@@ -115,15 +115,15 @@ func (db *LSDB) AddLink(link *Link) {
 	}
 }
 
-// RemoveNode 移除节点及其相关链路
+// RemoveNode removes a node and its related links
 func (db *LSDB) RemoveNode(nodeID uint32) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	// 移除节点
+	// remove the node
 	delete(db.Nodes, nodeID)
 
-	// 移除拓扑中与该节点相关的所有链路
+	// remove all links in the topology related to that node
 	for srcNodeID, targets := range db.Topology {
 		for dstNodeID := range targets {
 			if srcNodeID == nodeID || dstNodeID == nodeID {
@@ -135,13 +135,13 @@ func (db *LSDB) RemoveNode(nodeID uint32) {
 		}
 	}
 
-	// 从其他节点的邻居中移除该节点
+	// remove this node from other nodes' neighbor lists
 	for _, node := range db.Nodes {
 		delete(node.Neighbors, nodeID)
 	}
 }
 
-// RemoveLink 移除链路
+// RemoveLink removes a link
 func (db *LSDB) RemoveLink(linkID string) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -151,10 +151,10 @@ func (db *LSDB) RemoveLink(linkID string) {
 		return
 	}
 
-	// 移除链路
+	// remove the link
 	delete(db.Links, linkID)
 
-	// 更新拓扑
+	// update topology
 	if targets, exists := db.Topology[link.SrcNode]; exists {
 		delete(targets, link.DstNode)
 		if len(targets) == 0 {
@@ -162,7 +162,7 @@ func (db *LSDB) RemoveLink(linkID string) {
 		}
 	}
 
-	// 如果是双向链路，也移除反向拓扑
+	// if the link is bidirectional, also remove the reverse topology
 	if link.Status {
 		if targets, exists := db.Topology[link.DstNode]; exists {
 			delete(targets, link.SrcNode)
@@ -172,7 +172,7 @@ func (db *LSDB) RemoveLink(linkID string) {
 		}
 	}
 
-	// 更新节点的邻居信息
+	// update neighbor information for affected nodes
 	if srcNode, exists := db.Nodes[link.SrcNode]; exists {
 		delete(srcNode.Neighbors, link.DstNode)
 	}
@@ -201,7 +201,7 @@ func GetGlobalLSDB() *LSDB {
 func SaveLSDB(db *LSDB) {
 	// Persist LSDB to `config/lsdb.json` in the current working directory.
 	if err := SaveJSON("config/lsdb.json", db); err != nil {
-		// 可以添加日志记录
+		// optional: add logging
 		// log.Printf("Failed to save LSDB: %v", err)
 	}
 }
@@ -216,42 +216,42 @@ func LoadLSDB() *LSDB {
 	return db
 }
 
-// LoadOrCreateLSDB 加载LSDB，如果文件不存在则创建新的
+// LoadOrCreateLSDB loads LSDB from file; if file does not exist returns a new LSDB
 func LoadOrCreateLSDB(filename string) *LSDB {
 	db := NewLSDB()
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
-		// 文件不存在，返回空LSDB
+		// file does not exist, return empty LSDB
 		return db
 	}
 
 	if err := LoadJSON(filename, db); err != nil {
-		// 加载失败，返回空LSDB
+		// failed to load, return empty LSDB
 		return NewLSDB()
 	}
 
 	return db
 }
 
-// ==================== Dijkstra 算法实现 ====================
+// ==================== Dijkstra algorithm implementation ====================
 
-// MetricType 定义了路径计算的度量类型
+// MetricType defines metric types used for path calculation
 type MetricType int
 
 const (
-	MetricDelay     MetricType = iota // 基于延迟
-	MetricLoss                        // 基于丢包率
-	MetricComposite                   // 基于延迟和丢包率的复合度量
-	MetricBandwidth                   // 基于带宽（成本与带宽成反比）
+	MetricDelay     MetricType = iota // delay-based
+	MetricLoss                        // loss-based
+	MetricComposite                   // composite metric (delay + loss)
+	MetricBandwidth                   // bandwidth-based (cost inversely proportional to bandwidth)
 )
 
-// PathNode 用于Dijkstra算法的优先队列
+// PathNode used by the Dijkstra priority queue
 type PathNode struct {
 	NodeID   uint32
 	Distance float64
-	Index    int // 在堆中的索引
+	Index    int // index in the heap
 }
 
-// PriorityQueue 实现优先队列
+// PriorityQueue implements a min-priority queue
 type PriorityQueue []*PathNode
 
 func (pq PriorityQueue) Len() int { return len(pq) }
@@ -282,46 +282,46 @@ func (pq *PriorityQueue) Pop() interface{} {
 	return node
 }
 
-// PathResult 存储路径计算结果
+// PathResult stores results of path computation
 type PathResult struct {
-	Path        []uint32   `json:"path"`        // 节点路径
-	Links       []string   `json:"links"`       // 链路ID路径
-	TotalDelay  float64    `json:"totalDelay"`  // 总延迟(ms)
-	TotalLoss   float64    `json:"totalLoss"`   // 总丢包率（复合）
-	TotalCost   float64    `json:"totalCost"`   // 总成本（根据度量类型）
-	Metric      MetricType `json:"metric"`      // 使用的度量类型
-	Description string     `json:"description"` // 路径描述
+	Path        []uint32   `json:"path"`        // node path
+	Links       []string   `json:"links"`       // link ID path
+	TotalDelay  float64    `json:"totalDelay"`  // total delay (ms)
+	TotalLoss   float64    `json:"totalLoss"`   // total loss (composite)
+	TotalCost   float64    `json:"totalCost"`   // total cost (per metric)
+	Metric      MetricType `json:"metric"`      // metric used
+	Description string     `json:"description"` // path description
 }
 
-// calculateLinkCost 计算链路成本
+// calculateLinkCost computes the cost of a link for a given metric
 func calculateLinkCost(link *Link, metric MetricType) float64 {
 	switch metric {
 	case MetricDelay:
 		return float64(link.Delay)
 	case MetricLoss:
-		// 将丢包率转换为成本（丢包率越高，成本越高）
+		// convert loss rate to cost (higher loss -> higher cost)
 		if link.Loss <= 0 {
-			return 0.1 // 最小成本
+			return 0.1 // minimum cost
 		}
-		return float64(link.Loss * 100) // 放大100倍以匹配延迟的单位
+		return float64(link.Loss * 100) // scaled to match delay units
 	case MetricComposite:
-		// 复合度量：延迟 * (1 + 丢包率惩罚)
-		// 丢包率越高，惩罚越大
+		// composite metric: delay * (1 + loss penalty)
+		// higher loss increases penalty
 		lossPenalty := 1.0 + float64(link.Loss)*50.0
 		return float64(link.Delay) * lossPenalty
 	case MetricBandwidth:
-		// 基于带宽：带宽越大，成本越低
+		// bandwidth-based: higher bandwidth -> lower cost
 		if link.Bandwidth <= 0 {
-			return math.Inf(1) // 无效带宽
+			return math.Inf(1) // invalid bandwidth
 		}
-		// 使用 1/bandwidth 作为成本
-		return 1000.0 / float64(link.Bandwidth) // 假设带宽单位是Mbps
+		// use 1/bandwidth as cost
+		return 1000.0 / float64(link.Bandwidth) // assume Mbps unit
 	default:
 		return float64(link.Delay)
 	}
 }
 
-// GetMetricDescription 获取度量类型的描述
+// GetMetricDescription returns a human-readable description for a metric type
 func GetMetricDescription(metric MetricType) string {
 	switch metric {
 	case MetricDelay:
@@ -337,7 +337,7 @@ func GetMetricDescription(metric MetricType) string {
 	}
 }
 
-// ValidateLink 验证链路的有效性
+// ValidateLink validates link usability
 func ValidateLink(link *Link) bool {
 	if link == nil {
 		return false
@@ -354,12 +354,12 @@ func ValidateLink(link *Link) bool {
 	return true
 }
 
-// CalculatePath 使用Dijkstra算法计算最短路径
+// CalculatePath computes the shortest path using Dijkstra's algorithm
 func (db *LSDB) CalculatePath(src, dst uint32, metric MetricType) (*PathResult, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 
-	// 验证节点存在
+	// validate nodes exist
 	if _, exists := db.Nodes[src]; !exists {
 		return nil, errors.New("source node does not exist")
 	}
@@ -367,7 +367,7 @@ func (db *LSDB) CalculatePath(src, dst uint32, metric MetricType) (*PathResult, 
 		return nil, errors.New("destination node does not exist")
 	}
 
-	// 如果是同一个节点
+	// if source and destination are the same
 	if src == dst {
 		return &PathResult{
 			Path:        []uint32{src},
@@ -380,53 +380,53 @@ func (db *LSDB) CalculatePath(src, dst uint32, metric MetricType) (*PathResult, 
 		}, nil
 	}
 
-	// 初始化数据结构
+	// initialize data structures
 	dist := make(map[uint32]float64)
 	prev := make(map[uint32]uint32)
-	prevLink := make(map[uint32]string) // 记录到达节点的链路ID
+	prevLink := make(map[uint32]string) // record link ID used to reach the node
 	visited := make(map[uint32]bool)
 	pq := make(PriorityQueue, 0)
 	heap.Init(&pq)
 
-	// 初始化所有节点的距离
+	// initialize distances for all nodes
 	for nodeID := range db.Nodes {
 		dist[nodeID] = math.Inf(1)
 	}
 	dist[src] = 0
 
-	// 将源节点加入优先队列
+	// push source node into priority queue
 	heap.Push(&pq, &PathNode{NodeID: src, Distance: 0})
 
-	// Dijkstra算法主循环
+	// Dijkstra main loop
 	for pq.Len() > 0 {
-		// 获取当前最小距离节点
+		// pop current node with smallest distance
 		current := heap.Pop(&pq).(*PathNode)
 		currentID := current.NodeID
 
-		// 如果已经访问过，跳过
+		// skip if already visited
 		if visited[currentID] {
 			continue
 		}
 		visited[currentID] = true
 
-		// 如果找到目标节点，提前退出
+		// if destination found, exit early
 		if currentID == dst {
 			break
 		}
 
-		// 遍历邻居节点
+		// iterate over neighbors
 		if neighbors, exists := db.Topology[currentID]; exists {
 			for neighborID, linkID := range neighbors {
-				// 获取链路信息
+				// get link information
 				link, exists := db.Links[linkID]
 				if !exists || !ValidateLink(link) {
-					continue // 链路不存在或不可用
+					continue // link does not exist or is unusable
 				}
 
 				// 计算链路成本
 				cost := calculateLinkCost(link, metric)
 				if math.IsInf(cost, 1) {
-					continue // 无限成本，跳过
+					continue // infinite cost, skip
 				}
 
 				// 更新距离
@@ -441,16 +441,16 @@ func (db *LSDB) CalculatePath(src, dst uint32, metric MetricType) (*PathResult, 
 		}
 	}
 
-	// 检查是否找到路径
+	// check if a path was found
 	if math.IsInf(dist[dst], 1) {
 		return nil, errors.New("no path found between source and destination")
 	}
 
-	// 构建路径
+	// build the path
 	path := make([]uint32, 0)
 	links := make([]string, 0)
 
-	// 从目标节点回溯到源节点
+	// backtrack from destination to source
 	current := dst
 	for current != src {
 		path = append([]uint32{current}, path...)
@@ -467,7 +467,7 @@ func (db *LSDB) CalculatePath(src, dst uint32, metric MetricType) (*PathResult, 
 	}
 	path = append([]uint32{src}, path...)
 
-	// 计算路径的总延迟和总丢包率
+	// compute total delay and total loss for the path
 	totalDelay := 0.0
 	totalLoss := 0.0
 	for i := 0; i < len(path)-1; i++ {
@@ -476,7 +476,7 @@ func (db *LSDB) CalculatePath(src, dst uint32, metric MetricType) (*PathResult, 
 		if linkID, exists := db.Topology[srcNode][dstNode]; exists {
 			if link, exists := db.Links[linkID]; exists {
 				totalDelay += float64(link.Delay)
-				// 计算复合丢包率：1 - ∏(1 - loss_i)
+				// composite loss: 1 - Π(1 - loss_i)
 				totalLoss = 1 - (1-totalLoss)*(1-float64(link.Loss))
 			}
 		}
@@ -493,7 +493,7 @@ func (db *LSDB) CalculatePath(src, dst uint32, metric MetricType) (*PathResult, 
 	}, nil
 }
 
-// CalculateAllPaths 计算从源节点到所有节点的最短路径
+// CalculateAllPaths computes shortest paths from source to all nodes
 func (db *LSDB) CalculateAllPaths(src uint32, metric MetricType) (map[uint32]*PathResult, error) {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
@@ -502,7 +502,7 @@ func (db *LSDB) CalculateAllPaths(src uint32, metric MetricType) (map[uint32]*Pa
 		return nil, errors.New("source node does not exist")
 	}
 
-	// 使用Dijkstra计算到所有节点的最短距离
+	// run Dijkstra to compute shortest distances to all nodes
 	dist := make(map[uint32]float64)
 	prev := make(map[uint32]uint32)
 	prevLink := make(map[uint32]string)
@@ -510,14 +510,14 @@ func (db *LSDB) CalculateAllPaths(src uint32, metric MetricType) (map[uint32]*Pa
 	pq := make(PriorityQueue, 0)
 	heap.Init(&pq)
 
-	// 初始化
+	// initialization
 	for nodeID := range db.Nodes {
 		dist[nodeID] = math.Inf(1)
 	}
 	dist[src] = 0
 	heap.Push(&pq, &PathNode{NodeID: src, Distance: 0})
 
-	// Dijkstra算法
+	// Dijkstra algorithm
 	for pq.Len() > 0 {
 		current := heap.Pop(&pq).(*PathNode)
 		currentID := current.NodeID
@@ -551,14 +551,14 @@ func (db *LSDB) CalculateAllPaths(src uint32, metric MetricType) (map[uint32]*Pa
 		}
 	}
 
-	// 为每个可达节点构建路径结果
+	// build path results for each reachable node
 	results := make(map[uint32]*PathResult)
 	for dst := range db.Nodes {
 		if math.IsInf(dist[dst], 1) || dst == src {
 			continue
 		}
 
-		// 构建路径
+		// construct path
 		path := make([]uint32, 0)
 		links := make([]string, 0)
 		current := dst
@@ -573,12 +573,12 @@ func (db *LSDB) CalculateAllPaths(src uint32, metric MetricType) (map[uint32]*Pa
 			if prevNode, exists := prev[current]; exists {
 				current = prevNode
 			} else {
-				break // 路径重建失败
+				break // path reconstruction failed
 			}
 		}
 		path = append([]uint32{src}, path...)
 
-		// 计算路径统计
+		// compute path statistics
 		totalDelay := 0.0
 		totalLoss := 0.0
 		for i := 0; i < len(path)-1; i++ {
@@ -606,7 +606,7 @@ func (db *LSDB) CalculateAllPaths(src uint32, metric MetricType) (map[uint32]*Pa
 	return results, nil
 }
 
-// FindBestPath 根据多种度量类型寻找最佳路径
+// FindBestPath finds best paths using multiple metric types
 func (db *LSDB) FindBestPath(src, dst uint32) ([]*PathResult, error) {
 	results := make([]*PathResult, 0, 4)
 	metricTypes := []MetricType{MetricDelay, MetricLoss, MetricComposite, MetricBandwidth}
@@ -625,7 +625,7 @@ func (db *LSDB) FindBestPath(src, dst uint32) ([]*PathResult, error) {
 	return results, nil
 }
 
-// GetNetworkStats 获取网络统计信息
+// GetNetworkStats returns basic network statistics
 func (db *LSDB) GetNetworkStats() map[string]interface{} {
 	db.mu.RLock()
 	defer db.mu.RUnlock()
@@ -634,7 +634,7 @@ func (db *LSDB) GetNetworkStats() map[string]interface{} {
 	stats["totalNodes"] = len(db.Nodes)
 	stats["totalLinks"] = len(db.Links)
 
-	// 计算可用链路数
+	// compute number of available links
 	activeLinks := 0
 	totalDelay := float32(0)
 	totalLoss := float32(0)

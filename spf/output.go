@@ -2,6 +2,9 @@
 package spf
 
 import (
+	"net/netip"
+	"reflect"
+
 	"github.com/nttcom/pola/pkg/packet/pcep"
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
@@ -56,16 +59,53 @@ func PackPCUpd(m *bgp.BGPMessage) *pcep.PCUpdMessage {
 			}
 
 			if len(sids) > 0 {
-				// Prefer embedding SRv6 SIDs in a custom TLV to avoid relying on
-				// internal types and unsafe/reflect hacks. The TLV concatenates
-				// 16-byte IPv6 SIDs and is defined in `spf/tlv.go`.
+				// Build an SRv6 ERO (explicit route) using pcep's SRv6 subobject
+				// implementation. We construct values of the concrete segment type
+				// via reflection so we don't need to import pola's internal package.
 				pst := &pcep.PathSetupType{PathSetupType: pcep.PathSetupTypeSRv6TE}
 				srp := &pcep.SrpObject{ObjectType: pcep.ObjectTypeSRPSRP, RFlag: false, SrpID: srpID, TLVs: []pcep.TLVInterface{pst}}
-				tlv := &SRv6SIDListTLV{SIDs: sids}
-				srp.TLVs = append(srp.TLVs, tlv)
+
 				lsp, _ := pcep.NewLSPObject("", nil, 0)
 				pc.SrpObject = srp
 				pc.LSPObject = lsp
+
+				// Prepare ERO object and append SRv6 subobjects created reflectively
+				ero := &pcep.EroObject{ObjectType: pcep.ObjectTypeEROExplicitRoute, EroSubobjects: []pcep.EroSubobject{}}
+
+				// Helper: obtain the concrete SegmentSRv6 type via the SRv6EroSubobject's Segment field
+				var tmp pcep.SRv6EroSubobject
+				segField, _ := reflect.TypeOf(tmp).FieldByName("Segment")
+				segType := segField.Type
+
+				// Constructor function reference
+				newFn := reflect.ValueOf(pcep.NewSRv6EroSubObject)
+
+				for _, sid := range sids {
+					if a, err := netip.ParseAddr(sid); err == nil && a.Is6() {
+						segVal := reflect.New(segType).Elem()
+						// Set common fields expected by pcep.SRv6EroSubobject serialization
+						if f := segVal.FieldByName("Sid"); f.IsValid() && f.CanSet() {
+							f.Set(reflect.ValueOf(a))
+						}
+						// LocalAddr/RemoteAddr left as zero (invalid) unless needed
+
+						// Call pcep.NewSRv6EroSubObject(seg)
+						res := newFn.Call([]reflect.Value{segVal})
+						if !res[1].IsNil() {
+							// skip on error
+							continue
+						}
+						subobjIface := res[0].Interface()
+						if subobj, ok := subobjIface.(pcep.EroSubobject); ok {
+							ero.EroSubobjects = append(ero.EroSubobjects, subobj)
+						}
+					}
+				}
+
+				// Attach ERO only if we built subobjects
+				if len(ero.EroSubobjects) > 0 {
+					pc.EroObject = ero
+				}
 			}
 		}
 	}
