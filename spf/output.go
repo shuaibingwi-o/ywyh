@@ -28,9 +28,8 @@ func PackPCUpd(m *bgp.BGPMessage) *PCUpd {
 		lspLen = 16
 	}
 
-	// Try to compute a representative path (best-effort). We don't
-	// currently embed the path into the PCUpd, but path computation
-	// is performed to preserve previous behavior and side-effects.
+	// Try to compute a representative path (best-effort) and embed
+	// SRv6 SIDs from link entries into a PCUpd SRv6-ERO subobject.
 	var src, dst uint32
 	for id := range db.Nodes {
 		if src == 0 {
@@ -42,11 +41,34 @@ func PackPCUpd(m *bgp.BGPMessage) *PCUpd {
 			break
 		}
 	}
+
+	pc := NewPCUpd(GetSRPID(m), uint16(lspLen))
+
+	// Compute representative path and collect SRv6 SIDs from the LSDB links.
 	if src != 0 && dst != 0 {
-		if _, _err := db.CalculatePath(src, dst, MetricDelay); _err == nil {
-			// ignore returned path; presence of a path is sufficient
+		if path, err := db.CalculatePath(src, dst, MetricComposite); err == nil {
+			sids := []string{}
+			for _, linkID := range path.Links {
+				if link, ok := db.GetLink(linkID); ok {
+					if link.Sid != "" {
+						sids = append(sids, link.Sid)
+					}
+				}
+			}
+
+			if len(sids) > 0 {
+				// Prefer embedding SRv6 SIDs in a custom TLV to avoid relying on
+				// internal types and unsafe/reflect hacks. The TLV concatenates
+				// 16-byte IPv6 SIDs and is defined in `spf/tlv.go`.
+				pst := &pcep.PathSetupType{PathSetupType: pcep.PathSetupTypeSRv6TE}
+				srp := &pcep.SrpObject{ObjectType: pcep.ObjectTypeSRPSRP, RFlag: false, SrpID: pc.SRPID, TLVs: []pcep.TLVInterface{pst}}
+				tlv := &SRv6SIDListTLV{SIDs: sids}
+				srp.TLVs = append(srp.TLVs, tlv)
+				lsp, _ := pcep.NewLSPObject("", nil, 0)
+				pc.Raw = &pcep.PCUpdMessage{SrpObject: srp, LSPObject: lsp}
+			}
 		}
 	}
 
-	return NewPCUpd(GetSRPID(m), uint16(lspLen))
+	return pc
 }

@@ -21,6 +21,8 @@ type Node struct {
 	Locator  string `json:"locator"`
 	// 添加邻居信息
 	Neighbors map[uint32]string `json:"neighbors,omitempty"` // 邻居节点ID -> 链路ID
+	// SRv6 SIDs discovered for this node (if any)
+	SRv6SIDs []string `json:"srv6sids,omitempty"`
 }
 
 // Link represents a network adjacency stored in the LSDB.

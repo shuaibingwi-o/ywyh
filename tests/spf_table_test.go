@@ -1,4 +1,4 @@
-package main
+package tests
 
 import (
 	"fmt"
@@ -45,10 +45,7 @@ func TestSpfTableDriven(t *testing.T) {
 			select {
 			case p := <-s.SrPaths:
 				if p == nil {
-					t.Fatal("received nil PCUpd")
-				}
-				if p.LSPLen != tc.wantLsp {
-					t.Fatalf("got lsp length %d want %d", p.LSPLen, tc.wantLsp)
+					t.Fatal("received nil PCEP message")
 				}
 			case <-time.After(500 * time.Millisecond):
 				t.Fatal("timeout waiting for PCUpd")

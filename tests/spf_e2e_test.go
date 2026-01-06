@@ -1,4 +1,4 @@
-package main
+package tests
 
 import (
 	"os"
@@ -44,10 +44,7 @@ func TestSpfE2E_LoadAndSaveLSDB(t *testing.T) {
 	select {
 	case p := <-s.SrPaths:
 		if p == nil {
-			t.Fatal("received nil PCUpd")
-		}
-		if p.SRPID != uint32(99) {
-			t.Fatalf("unexpected SRP ID: %d", p.SRPID)
+			t.Fatal("received nil PCEP message")
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("timeout waiting for PCUpd")

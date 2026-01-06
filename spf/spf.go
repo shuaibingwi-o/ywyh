@@ -21,7 +21,7 @@ type Spf struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	BgpUpdates chan *bgp.BGPMessage
-	SrPaths    chan *PCUpd
+	SrPaths    chan *pcep.PCUpdMessage
 }
 
 // NewSpf creates a new Spf instance with provided buffer sizes.
@@ -31,7 +31,7 @@ func NewSpf(bufIn, bufOut int) *Spf {
 		ctx:        ctx,
 		cancel:     cancel,
 		BgpUpdates: make(chan *bgp.BGPMessage, bufIn),
-		SrPaths:    make(chan *PCUpd, bufOut),
+		SrPaths:    make(chan *pcep.PCUpdMessage, bufOut),
 	}
 }
 
@@ -86,7 +86,7 @@ func (s *Spf) eventLoop() {
 				pc = PackPCUpd(m)
 			}
 			select {
-			case s.SrPaths <- pc:
+			case s.SrPaths <- pc.Raw:
 			case <-s.ctx.Done():
 				return
 			}

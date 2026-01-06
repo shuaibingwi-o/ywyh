@@ -1,5 +1,5 @@
 // Package tests contains placeholder tests used while the project is built out.
-package main
+package tests
 
 import "testing"
 

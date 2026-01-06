@@ -1,6 +1,6 @@
 // Package tests contains small integration tests driving helper functions
 // in the `spf` package.
-package main
+package tests
 
 import (
 	"path/filepath"

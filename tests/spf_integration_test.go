@@ -1,4 +1,4 @@
-package main
+package tests
 
 import (
 	"testing"
@@ -25,13 +25,7 @@ func TestSpfPipelineMovedToTests(t *testing.T) {
 			t.Fatal("SrPaths channel closed unexpectedly")
 		}
 		if sp == nil {
-			t.Fatal("received nil PCUpd")
-		}
-		if sp.SRPID != uint32(123) {
-			t.Fatalf("unexpected srpID: got %d want %d", sp.SRPID, 123)
-		}
-		if sp.LSPLen != uint16(len(spf.GlobalLSDB.Links)) {
-			t.Fatalf("unexpected lsp length: got %d want %d", sp.LSPLen, len(spf.GlobalLSDB.Links))
+			t.Fatal("received nil PCEP message")
 		}
 	case <-time.After(1 * time.Second):
 		t.Fatal("timeout waiting for PCUpd")

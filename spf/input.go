@@ -3,18 +3,11 @@ package spf
 import (
 	"fmt"
 	"hash/fnv"
-	"reflect"
-	"strings"
 
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
-// applyBGPUpdateToLSDB updates the GlobalLSDB based on the provided
-// *bgp.BGPMessage. It inspects the message for NLRI/path-attributes and
-// materializes deterministic Node and Link entries so the SPF pipeline
-// can compute paths. Synthetic test messages registered in bgpSrp are
-// ignored to avoid interfering with tests.
-// applyBGPUpdateToLSDB applies the provided BGP message to the
+// ApplyBGPUpdateToLSDB applies the provided BGP message to the
 // GlobalLSDB. It returns true if the LSDB was modified.
 func ApplyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
 	if m == nil {
@@ -28,84 +21,137 @@ func ApplyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
 		return false
 	}
 
-	// Collect NLRI-like strings by reflecting through the message.
-	var nlriStrs []string
-	target := reflect.TypeOf(bgp.PathNLRI{})
+	// If this is a BGP UPDATE, try to parse BGP-LS NLRI entries directly
+	if upd, ok := m.Body.(*bgp.BGPUpdate); ok {
+		changed := false
+		for _, p := range upd.NLRI {
+			// We expect p.NLRI to be an *bgp.LsAddrPrefix when this is BGP-LS
+			if lp, ok := p.NLRI.(*bgp.LsAddrPrefix); ok {
+				switch lp.Type {
+				case bgp.LS_NLRI_TYPE_NODE:
+					if nodeNLRI, ok := lp.NLRI.(*bgp.LsNodeNLRI); ok {
+						if nodeNLRI.LocalNodeDesc != nil {
+							if desc, ok := nodeNLRI.LocalNodeDesc.(*bgp.LsTLVNodeDescriptor); ok {
+								nd := desc.Extract()
+								var locator string
+								if nd.BGPRouterID.IsValid() {
+									locator = nd.BGPRouterID.String()
+								} else if nd.IGPRouterID != "" {
+									locator = nd.IGPRouterID
+								} else {
+									locator = fmt.Sprintf("as-%d-id-%d", nd.Asn, nd.BGPLsID)
+								}
+								h := fnv.New32a()
+								h.Write([]byte(locator))
+								id := h.Sum32()
+								node := &Node{RouterId: id, Locator: locator, AsNum: nd.Asn}
+								GlobalLSDB.AddNode(node)
+								changed = true
+							}
+						}
+					}
 
-	var walk func(reflect.Value)
-	walk = func(rv reflect.Value) {
-		if !rv.IsValid() {
-			return
-		}
-		switch rv.Kind() {
-		case reflect.Ptr, reflect.Interface:
-			if !rv.IsNil() {
-				walk(rv.Elem())
-			}
-		case reflect.Struct:
-			for i := 0; i < rv.NumField(); i++ {
-				fv := rv.Field(i)
-				if fv.IsValid() && fv.CanInterface() {
-					if s := fmt.Sprint(fv.Interface()); len(s) > 0 {
-						if containsSlash(s) || looksLikeSRInfo(s) {
-							nlriStrs = append(nlriStrs, s)
+				case bgp.LS_NLRI_TYPE_LINK:
+					if linkNLRI, ok := lp.NLRI.(*bgp.LsLinkNLRI); ok {
+						// Extract local/remote identifiers
+						var localID, remoteID string
+						// prefer interface IPv6 addresses if present
+						ld := &bgp.LsLinkDescriptor{}
+						ld.ParseTLVs(linkNLRI.LinkDesc)
+						if ld.InterfaceAddrIPv6 != nil {
+							localID = ld.InterfaceAddrIPv6.String()
+						}
+						if ld.NeighborAddrIPv6 != nil {
+							remoteID = ld.NeighborAddrIPv6.String()
+						}
+						// fallback to BGP router IDs from node descriptors
+						if localID == "" && linkNLRI.LocalNodeDesc != nil {
+							if d, ok := linkNLRI.LocalNodeDesc.(*bgp.LsTLVNodeDescriptor); ok {
+								localID = d.Extract().BGPRouterID.String()
+							}
+						}
+						if remoteID == "" && linkNLRI.RemoteNodeDesc != nil {
+							if d, ok := linkNLRI.RemoteNodeDesc.(*bgp.LsTLVNodeDescriptor); ok {
+								remoteID = d.Extract().BGPRouterID.String()
+							}
+						}
+						if localID == "" && remoteID == "" {
+							// nothing usable
+							continue
+						}
+						if localID == "" {
+							localID = remoteID + "-local"
+						}
+						if remoteID == "" {
+							remoteID = localID + "-remote"
+						}
+						h1 := fnv.New32a()
+						h1.Write([]byte(localID))
+						id1 := h1.Sum32()
+						h2 := fnv.New32a()
+						h2.Write([]byte(remoteID))
+						id2 := h2.Sum32()
+						GlobalLSDB.AddNode(&Node{RouterId: id1, Locator: localID})
+						GlobalLSDB.AddNode(&Node{RouterId: id2, Locator: remoteID})
+						inf := fmt.Sprintf("ls-link-%d-%d", id1, id2)
+						link := &Link{InfId: inf, SrcNode: id1, DstNode: id2, Status: true}
+						GlobalLSDB.AddLink(link)
+						changed = true
+					}
+
+				case bgp.LS_NLRI_TYPE_SRV6_SID:
+					if srv6NLRI, ok := lp.NLRI.(*bgp.LsSrv6SIDNLRI); ok {
+						if srv6NLRI.LocalNodeDesc != nil && srv6NLRI.Srv6SIDInfo != nil {
+							if desc, ok := srv6NLRI.LocalNodeDesc.(*bgp.LsTLVNodeDescriptor); ok {
+								nd := desc.Extract()
+								var locator string
+								if nd.BGPRouterID.IsValid() {
+									locator = nd.BGPRouterID.String()
+								} else if nd.IGPRouterID != "" {
+									locator = nd.IGPRouterID
+								} else {
+									locator = fmt.Sprintf("as-%d-id-%d", nd.Asn, nd.BGPLsID)
+								}
+								h := fnv.New32a()
+								h.Write([]byte(locator))
+								id := h.Sum32()
+								// Ensure node exists
+								GlobalLSDB.AddNode(&Node{RouterId: id, Locator: locator, AsNum: nd.Asn})
+								// Extract SIDs
+								if sInfo, ok := srv6NLRI.Srv6SIDInfo.(*bgp.LsTLVSrv6SIDInfo); ok {
+									sids := []string{}
+									for _, a := range sInfo.SIDs {
+										if a.Is6() {
+											sids = append(sids, a.String())
+										}
+									}
+									if len(sids) > 0 {
+										// Append SIDs to node entry (avoid duplicates)
+										if node, exists := GlobalLSDB.GetNode(id); exists {
+											existMap := map[string]bool{}
+											for _, v := range node.SRv6SIDs {
+												existMap[v] = true
+											}
+											for _, sid := range sids {
+												if !existMap[sid] {
+													node.SRv6SIDs = append(node.SRv6SIDs, sid)
+												}
+											}
+											GlobalLSDB.AddNode(node)
+										}
+									}
+								}
+								changed = true
+							}
 						}
 					}
 				}
-				walk(fv)
 			}
-		case reflect.Slice, reflect.Array:
-			et := rv.Type().Elem()
-			if et == target {
-				for i := 0; i < rv.Len(); i++ {
-					item := rv.Index(i)
-					if item.Kind() == reflect.Struct {
-						f := item.FieldByName("NLRI")
-						if f.IsValid() {
-							nlriStrs = append(nlriStrs, fmt.Sprint(f.Interface()))
-						}
-					}
-				}
-			} else {
-				for i := 0; i < rv.Len(); i++ {
-					item := rv.Index(i)
-					if item.IsValid() && item.CanInterface() {
-						if s := fmt.Sprint(item.Interface()); containsSlash(s) || looksLikeSRInfo(s) {
-							nlriStrs = append(nlriStrs, s)
-						}
-					}
-					walk(item)
-				}
-			}
+		}
+		if changed {
+			return true
 		}
 	}
 
-	rv := reflect.ValueOf(m)
-	walk(rv)
-
-	if len(nlriStrs) == 0 {
-		return false
-	}
-
-	var prevID uint32
-	for idx, s := range nlriStrs {
-		h := fnv.New32a()
-		h.Write([]byte(s))
-		id := h.Sum32()
-		node := &Node{RouterId: id, Locator: s}
-		GlobalLSDB.AddNode(node)
-		if idx > 0 {
-			link := &Link{InfId: fmt.Sprintf("nlri-link-%d-%d", prevID, id), SrcNode: prevID, DstNode: id, Status: true}
-			GlobalLSDB.AddLink(link)
-		}
-		prevID = id
-	}
-	return true
-}
-
-func containsSlash(s string) bool { return strings.Contains(s, "/") }
-
-func looksLikeSRInfo(s string) bool {
-	ls := strings.ToLower(s)
-	return strings.Contains(ls, "sr") || strings.Contains(ls, "sid") || strings.Contains(ls, "segment") || strings.Contains(ls, "srv6")
+	return false
 }
