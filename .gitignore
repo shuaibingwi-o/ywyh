@@ -1,0 +1,14 @@
+# Ignore local LSDB state
+config/lsdb.json
+
+# Ignore editor temp files
+*.swp
+*.tmp
+
+# Go build outputs
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
