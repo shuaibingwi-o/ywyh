@@ -19,6 +19,7 @@ func main() {
 	s.Start()
 	defer s.Stop()
 
+	// create a synthetic BGP update with SRP identifier 42
 	msg := spf.NewBGPUpdate(42)
 	// send the parsed BGP message into the pipeline
 	s.BgpUpdates <- msg

@@ -46,6 +46,14 @@ func ApplyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
 								id := h.Sum32()
 								node := &Node{RouterId: id, Locator: locator, AsNum: nd.Asn}
 								GlobalLSDB.AddNode(node)
+								// If this NLRI carries a BGPLsID, register it
+								// as the SRP identifier for this BGP message so
+								// downstream packaging can use it.
+								if nd.BGPLsID != 0 {
+									bgpSrpMu.Lock()
+									bgpSrp[m] = uint32(nd.BGPLsID)
+									bgpSrpMu.Unlock()
+								}
 								changed = true
 							}
 						}
@@ -117,6 +125,12 @@ func ApplyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
 								id := h.Sum32()
 								// Ensure node exists
 								GlobalLSDB.AddNode(&Node{RouterId: id, Locator: locator, AsNum: nd.Asn})
+								// Register BGPLsID as SRP identifier when present.
+								if nd.BGPLsID != 0 {
+									bgpSrpMu.Lock()
+									bgpSrp[m] = uint32(nd.BGPLsID)
+									bgpSrpMu.Unlock()
+								}
 								// Extract SIDs
 								if sInfo, ok := srv6NLRI.Srv6SIDInfo.(*bgp.LsTLVSrv6SIDInfo); ok {
 									sids := []string{}

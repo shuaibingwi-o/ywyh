@@ -6,17 +6,15 @@ import (
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
-// NewPCUpd constructs a minimal PCUpd wrapper used by the SPF pipeline
-// and tests. Currently the returned `PCUpd.Raw` is an empty
-// `pcep.PCUpdMessage` ready to be populated by callers if desired.
-func NewPCUpd(srpID uint32, lspLen uint16) *PCUpd {
-	return &PCUpd{Raw: &pcep.PCUpdMessage{}, SRPID: srpID, LSPLen: lspLen}
+// NewPCUpd constructs a minimal `pcep.PCUpdMessage` with provided SRP ID.
+func NewPCUpd(srpID uint32, lspLen uint16) *pcep.PCUpdMessage {
+	return &pcep.PCUpdMessage{SrpObject: &pcep.SrpObject{SrpID: srpID}}
 }
 
 // PackPCUpd handles a received BGP update by applying it to the LSDB,
 // attempting a representative path calculation, and returning a
-// PCUpd wrapper populated with SRP ID and LSP length (capped at 16).
-func PackPCUpd(m *bgp.BGPMessage) *PCUpd {
+// `pcep.PCUpdMessage` populated with SRP and LSP information.
+func PackPCUpd(m *bgp.BGPMessage) *pcep.PCUpdMessage {
 	if m == nil {
 		return nil
 	}
@@ -29,7 +27,7 @@ func PackPCUpd(m *bgp.BGPMessage) *PCUpd {
 	}
 
 	// Try to compute a representative path (best-effort) and embed
-	// SRv6 SIDs from link entries into a PCUpd SRv6-ERO subobject.
+	// SRv6 SIDs from link entries into the PCUpd ERO or TLVs.
 	var src, dst uint32
 	for id := range db.Nodes {
 		if src == 0 {
@@ -42,7 +40,8 @@ func PackPCUpd(m *bgp.BGPMessage) *PCUpd {
 		}
 	}
 
-	pc := NewPCUpd(GetSRPID(m), uint16(lspLen))
+	srpID := GetSRPID(m)
+	pc := NewPCUpd(srpID, uint16(lspLen))
 
 	// Compute representative path and collect SRv6 SIDs from the LSDB links.
 	if src != 0 && dst != 0 {
@@ -61,11 +60,12 @@ func PackPCUpd(m *bgp.BGPMessage) *PCUpd {
 				// internal types and unsafe/reflect hacks. The TLV concatenates
 				// 16-byte IPv6 SIDs and is defined in `spf/tlv.go`.
 				pst := &pcep.PathSetupType{PathSetupType: pcep.PathSetupTypeSRv6TE}
-				srp := &pcep.SrpObject{ObjectType: pcep.ObjectTypeSRPSRP, RFlag: false, SrpID: pc.SRPID, TLVs: []pcep.TLVInterface{pst}}
+				srp := &pcep.SrpObject{ObjectType: pcep.ObjectTypeSRPSRP, RFlag: false, SrpID: srpID, TLVs: []pcep.TLVInterface{pst}}
 				tlv := &SRv6SIDListTLV{SIDs: sids}
 				srp.TLVs = append(srp.TLVs, tlv)
 				lsp, _ := pcep.NewLSPObject("", nil, 0)
-				pc.Raw = &pcep.PCUpdMessage{SrpObject: srp, LSPObject: lsp}
+				pc.SrpObject = srp
+				pc.LSPObject = lsp
 			}
 		}
 	}

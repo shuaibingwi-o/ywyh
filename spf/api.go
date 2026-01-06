@@ -15,12 +15,12 @@ var (
 // SRv6Paths results.
 
 // NewBGPUpdate creates an empty `*bgp.BGPMessage` and registers the
-// provided srp identifier so the conversion logic can preserve the
+// provided SRP identifier so the conversion logic can preserve the
 // original numeric ID used by tests/examples.
-func NewBGPUpdate(length uint16) *bgp.BGPMessage {
+func NewBGPUpdate(srpID uint32) *bgp.BGPMessage {
 	m := &bgp.BGPMessage{}
 	bgpSrpMu.Lock()
-	bgpSrp[m] = uint32(length)
+	bgpSrp[m] = srpID
 	bgpSrpMu.Unlock()
 	return m
 }

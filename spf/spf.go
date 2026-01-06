@@ -8,13 +8,7 @@ import (
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
-// PCUpd is a small wrapper used by tests/examples to carry a PCEP
-// PCUpdMessage plus lightweight metadata (SRP identifier and LSP length).
-type PCUpd struct {
-	Raw    *pcep.PCUpdMessage
-	SRPID  uint32
-	LSPLen uint16
-}
+// Note: pipeline sends `*pcep.PCUpdMessage` values on `SrPaths` channel.
 
 // Spf holds the pipeline channels and context.
 type Spf struct {
@@ -66,27 +60,26 @@ func (s *Spf) eventLoop() {
 			// did not modify the LSDB, skip PCUpd construction and
 			// avoid sending a message to consumers.
 			changed := ApplyBGPUpdateToLSDB(m)
-			var pc *PCUpd
+			var pcMsg *pcep.PCUpdMessage
 			if !changed {
 				// If the message is synthetic (has a registered SRP ID),
-				// emit a PCUpd reporting the current LSP length so tests
-				// and consumers can observe topology size. Otherwise
-				// skip emitting.
+				// emit a minimal PCUpdMessage reporting the current LSP
+				// length so tests and consumers can observe topology size.
 				if GetSRPID(m) != 0 {
 					db := GetGlobalLSDB()
 					lspLen := len(db.Links)
 					if lspLen > 16 {
 						lspLen = 16
 					}
-					pc = NewPCUpd(GetSRPID(m), uint16(lspLen))
+					pcMsg = NewPCUpd(GetSRPID(m), uint16(lspLen))
 				} else {
 					continue
 				}
 			} else {
-				pc = PackPCUpd(m)
+				pcMsg = PackPCUpd(m)
 			}
 			select {
-			case s.SrPaths <- pc.Raw:
+			case s.SrPaths <- pcMsg:
 			case <-s.ctx.Done():
 				return
 			}
