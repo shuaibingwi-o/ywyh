@@ -431,13 +431,13 @@ func (db *LSDB) CalculatePath(src, dst uint32, metric MetricType) (*PathResult, 
 					continue // link does not exist or is unusable
 				}
 
-				// 计算链路成本
+				// Calculate link cost
 				cost := calculateLinkCost(link, metric)
 				if math.IsInf(cost, 1) {
 					continue // infinite cost, skip
 				}
 
-				// 更新距离
+				// Update distance
 				newDist := dist[currentID] + cost
 				if newDist < dist[neighborID] {
 					dist[neighborID] = newDist

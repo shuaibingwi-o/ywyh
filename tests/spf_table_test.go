@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	"ywyh/spf"
+
+	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
 func TestSpfTableDriven(t *testing.T) {
@@ -54,7 +56,7 @@ func TestSpfTableDriven(t *testing.T) {
 			// Directly call PackPCUpd with a BGP message carrying an
 			// SRP identifier. This avoids depending on the internal
 			// event loop while still exercising output construction.
-			m := spf.NewBGPUpdate(7)
+			m := &bgp.BGPMessage{}
 			pc := spf.PackPCUpd(m)
 			if pc == nil {
 				t.Fatal("PackPCUpd returned nil")

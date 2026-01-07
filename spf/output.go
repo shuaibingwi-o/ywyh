@@ -52,7 +52,8 @@ func PackPCUpd(m *bgp.BGPMessage) *pcep.PCUpdMessage {
 		}
 	}
 
-	srpID := GetSRPID(m)
+	// TODO: implement per-session SRP ID management. For now always use 0.
+	srpID := uint32(0)
 	pc := NewPCUpd(srpID, uint16(lspLen))
 
 	// Compute representative path and collect SRv6 SIDs from the LSDB links.

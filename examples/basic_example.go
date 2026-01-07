@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"ywyh/spf"
+
+	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
 // Basic example: construct a small LSDB, start the Spf pipeline,
@@ -28,8 +30,8 @@ func main() {
 	s.Start()
 	defer s.Stop()
 
-	// create a synthetic BGP update with SRP identifier 42
-	msg := spf.NewBGPUpdate(42)
+	// create a synthetic BGP update (SRP ID currently unused)
+	msg := &bgp.BGPMessage{}
 	// send the parsed BGP message into the pipeline
 	s.BgpUpdates <- msg
 

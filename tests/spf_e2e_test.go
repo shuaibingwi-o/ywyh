@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"ywyh/spf"
+
+	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
 // End-to-end test: when Spf.Start loads LSDB from disk, and Spf.Stop saves
@@ -48,8 +50,8 @@ func TestSpfE2E_LoadAndSaveLSDB(t *testing.T) {
 	// mutate the in-memory LSDB and send an update through the pipeline
 	spf.GlobalLSDB.AddLink(&spf.Link{InfId: "dynamic"})
 
-	// Directly call PackPCUpd with a BGP message carrying an SRP ID.
-	m := spf.NewBGPUpdate(99)
+	// Directly call PackPCUpd with a BGP message (SRP ID currently unused).
+	m := &bgp.BGPMessage{}
 	pc := spf.PackPCUpd(m)
 	if pc == nil {
 		t.Fatal("PackPCUpd returned nil")

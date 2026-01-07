@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"ywyh/spf"
+
+	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
 func TestSpfPipelineMovedToTests(t *testing.T) {
@@ -24,8 +26,8 @@ func TestSpfPipelineMovedToTests(t *testing.T) {
 	s.Start()
 	defer s.Stop()
 
-	// Directly call PackPCUpd with a BGP message carrying an SRP ID.
-	m := spf.NewBGPUpdate(123)
+	// Directly call PackPCUpd with a BGP message (SRP ID currently unused).
+	m := &bgp.BGPMessage{}
 	pc := spf.PackPCUpd(m)
 	if pc == nil {
 		t.Fatal("PackPCUpd returned nil")

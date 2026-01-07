@@ -12,6 +12,7 @@ package spf
 import (
 	"fmt"
 	"hash/fnv"
+	"strconv"
 
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
@@ -23,12 +24,7 @@ func ApplyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
 		return false
 	}
 
-	bgpSrpMu.Lock()
-	_, synthetic := bgpSrp[m]
-	bgpSrpMu.Unlock()
-	if synthetic {
-		return false
-	}
+	// NOTE: SRP ID maintenance removed; do not skip synthetic messages here.
 
 	// If this is a BGP UPDATE, try to parse BGP-LS NLRI entries directly
 	if upd, ok := m.Body.(*bgp.BGPUpdate); ok {
@@ -59,9 +55,8 @@ func ApplyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
 								// as the SRP identifier for this BGP message so
 								// downstream packaging can use it.
 								if nd.BGPLsID != 0 {
-									bgpSrpMu.Lock()
-									bgpSrp[m] = uint32(nd.BGPLsID)
-									bgpSrpMu.Unlock()
+									// TODO: consider registering BGPLsID per session if needed.
+									// Currently SRP ID handling is disabled and defaults to 0.
 								}
 								changed = true
 							}
@@ -110,63 +105,19 @@ func ApplyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
 						id2 := h2.Sum32()
 						GlobalLSDB.AddNode(&Node{RouterId: id1, Locator: localID})
 						GlobalLSDB.AddNode(&Node{RouterId: id2, Locator: remoteID})
-						inf := fmt.Sprintf("ls-link-%d-%d", id1, id2)
-						link := &Link{InfId: inf, SrcNode: id1, DstNode: id2, Status: true}
-						GlobalLSDB.AddLink(link)
-						changed = true
-					}
-
-				case bgp.LS_NLRI_TYPE_SRV6_SID:
-					if srv6NLRI, ok := lp.NLRI.(*bgp.LsSrv6SIDNLRI); ok {
-						if srv6NLRI.LocalNodeDesc != nil && srv6NLRI.Srv6SIDInfo != nil {
-							if desc, ok := srv6NLRI.LocalNodeDesc.(*bgp.LsTLVNodeDescriptor); ok {
-								nd := desc.Extract()
-								var locator string
-								if nd.BGPRouterID.IsValid() {
-									locator = nd.BGPRouterID.String()
-								} else if nd.IGPRouterID != "" {
-									locator = nd.IGPRouterID
-								} else {
-									locator = fmt.Sprintf("as-%d-id-%d", nd.Asn, nd.BGPLsID)
-								}
-								h := fnv.New32a()
-								h.Write([]byte(locator))
-								id := h.Sum32()
-								// Ensure node exists
-								GlobalLSDB.AddNode(&Node{RouterId: id, Locator: locator, AsNum: nd.Asn})
-								// Register BGPLsID as SRP identifier when present.
-								if nd.BGPLsID != 0 {
-									bgpSrpMu.Lock()
-									bgpSrp[m] = uint32(nd.BGPLsID)
-									bgpSrpMu.Unlock()
-								}
-								// Extract SIDs
-								if sInfo, ok := srv6NLRI.Srv6SIDInfo.(*bgp.LsTLVSrv6SIDInfo); ok {
-									sids := []string{}
-									for _, a := range sInfo.SIDs {
-										if a.Is6() {
-											sids = append(sids, a.String())
-										}
-									}
-									if len(sids) > 0 {
-										// Append SIDs to node entry (avoid duplicates)
-										if node, exists := GlobalLSDB.GetNode(id); exists {
-											existMap := map[string]bool{}
-											for _, v := range node.SRv6SIDs {
-												existMap[v] = true
-											}
-											for _, sid := range sids {
-												if !existMap[sid] {
-													node.SRv6SIDs = append(node.SRv6SIDs, sid)
-												}
-											}
-											GlobalLSDB.AddNode(node)
-										}
-									}
-								}
-								changed = true
+						// 使用 local interface ID 作为链路的 key
+						link := &Link{InfId: localID, SrcNode: id1, DstNode: id2, Status: true}
+						// 仅使用 adjacency SID（或 peer adjacency SID）作为链路 Sid，不使用节点的 SRv6 SIDs
+						for _, tlv := range linkNLRI.LinkDesc {
+							switch v := tlv.(type) {
+							case *bgp.LsTLVAdjacencySID:
+								link.Sid = strconv.FormatUint(uint64(v.SID), 10)
+								// found adjacency SID, prefer it
+								break
 							}
 						}
+						GlobalLSDB.AddLink(link)
+						changed = true
 					}
 				}
 			}
