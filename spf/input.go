@@ -105,18 +105,25 @@ func ApplyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
 						id2 := h2.Sum32()
 						GlobalLSDB.AddNode(&Node{RouterId: id1, Locator: localID})
 						GlobalLSDB.AddNode(&Node{RouterId: id2, Locator: remoteID})
-						// 使用 local interface ID 作为链路的 key
-						link := &Link{InfId: localID, SrcNode: id1, DstNode: id2, Status: true}
-						// 仅使用 adjacency SID（或 peer adjacency SID）作为链路 Sid，不使用节点的 SRv6 SIDs
+						// 使用 local interface ID 作为链路的 key，创建两个单向链路（local->remote, remote->local）
+						// 从 TLV 中分别提取 adjacency SID 与 peer-adjacency SID
+						var sidFwd, sidRev string
 						for _, tlv := range linkNLRI.LinkDesc {
 							switch v := tlv.(type) {
 							case *bgp.LsTLVAdjacencySID:
-								link.Sid = strconv.FormatUint(uint64(v.SID), 10)
-								// found adjacency SID, prefer it
-								break
+								sidFwd = strconv.FormatUint(uint64(v.SID), 10)
+							case *bgp.LsTLVPeerAdjacencySID:
+								sidRev = strconv.FormatUint(uint64(v.SID), 10)
 							}
 						}
-						GlobalLSDB.AddLink(link)
+
+						// forward: local -> remote
+						linkF := &Link{InfId: localID, SrcNode: id1, DstNode: id2, Status: true, Sid: sidFwd}
+						// reverse: remote -> local
+						linkR := &Link{InfId: remoteID, SrcNode: id2, DstNode: id1, Status: true, Sid: sidRev}
+
+						GlobalLSDB.AddLink(linkF)
+						GlobalLSDB.AddLink(linkR)
 						changed = true
 					}
 				}

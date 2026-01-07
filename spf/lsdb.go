@@ -106,21 +106,6 @@ func (db *LSDB) AddLink(link *Link) {
 		}
 		srcNode.Neighbors[link.DstNode] = link.InfId
 	}
-
-	// if the link is bidirectional, also add reverse topology
-	if link.Status {
-		if db.Topology[link.DstNode] == nil {
-			db.Topology[link.DstNode] = make(map[uint32]string)
-		}
-		db.Topology[link.DstNode][link.SrcNode] = link.InfId
-
-		if dstNode, exists := db.Nodes[link.DstNode]; exists {
-			if dstNode.Neighbors == nil {
-				dstNode.Neighbors = make(map[uint32]string)
-			}
-			dstNode.Neighbors[link.SrcNode] = link.InfId
-		}
-	}
 }
 
 // RemoveNode removes a node and its related links
@@ -170,22 +155,9 @@ func (db *LSDB) RemoveLink(linkID string) {
 		}
 	}
 
-	// if the link is bidirectional, also remove the reverse topology
-	if link.Status {
-		if targets, exists := db.Topology[link.DstNode]; exists {
-			delete(targets, link.SrcNode)
-			if len(targets) == 0 {
-				delete(db.Topology, link.DstNode)
-			}
-		}
-	}
-
-	// update neighbor information for affected nodes
+	// update neighbor information for affected nodes (remove forward neighbor)
 	if srcNode, exists := db.Nodes[link.SrcNode]; exists {
 		delete(srcNode.Neighbors, link.DstNode)
-	}
-	if dstNode, exists := db.Nodes[link.DstNode]; exists {
-		delete(dstNode.Neighbors, link.SrcNode)
 	}
 }
 
