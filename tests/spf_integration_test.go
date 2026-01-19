@@ -22,13 +22,13 @@ func TestSpfPipelineMovedToTests(t *testing.T) {
 	spf.GlobalLSDB.AddLink(&spf.Link{InfId: "lnk1"})
 	spf.GlobalLSDB.AddLink(&spf.Link{InfId: "lnk2"})
 
-	s := spf.NewSpf(1, 1)
+	s := spf.NewSpf(1000, 1000)
 	s.Start()
 	defer s.Stop()
 
 	// Directly call PackPCUpd with a BGP message (SRP ID currently unused).
 	m := &bgp.BGPMessage{}
-	pc := spf.PackPCUpd(m)
+	pc := spf.PackPCUpd(s, m)
 	if pc == nil {
 		t.Fatal("PackPCUpd returned nil")
 	}

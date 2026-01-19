@@ -22,18 +22,42 @@ import (
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
+// PathRequest represents a request for path computation.
+type PathRequest struct {
+	Src      uint32
+	Dst      uint32
+	Response chan []string
+}
+
 // MockPceServer simulates a PCE server for testing purposes.
 type MockPceServer struct {
-	listener net.Listener
+	listener     net.Listener
+	spf          *spf.Spf
+	pathRequests chan PathRequest
 }
 
 // NewMockPceServer initializes a new MockPceServer.
-func NewMockPceServer() *MockPceServer {
+func NewMockPceServer(spf *spf.Spf) *MockPceServer {
 	listener, err := net.Listen("tcp", ":4189")
 	if err != nil {
 		panic(err)
 	}
-	return &MockPceServer{listener: listener}
+	pathRequests := make(chan PathRequest, 1000)
+	server := &MockPceServer{listener: listener, spf: spf, pathRequests: pathRequests}
+	server.startWorkers(10) // Start 10 workers
+	return server
+}
+
+// startWorkers starts a pool of worker goroutines for path computation.
+func (m *MockPceServer) startWorkers(numWorkers int) {
+	for i := 0; i < numWorkers; i++ {
+		go func() {
+			for req := range m.pathRequests {
+				sids := m.computePath(req.Src, req.Dst)
+				req.Response <- sids
+			}
+		}()
+	}
 }
 
 // Start starts the server to accept connections.
@@ -157,6 +181,8 @@ func (m *MockPceServer) parsePCReq(payload []byte) (uint32, uint32, uint32) {
 func (m *MockPceServer) handleConnection(conn net.Conn) {
 	defer conn.Close()
 	buf := make([]byte, 4096)
+	var sessionID uint8
+	var openReceived bool
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
@@ -175,18 +201,35 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 		if length > n {
 			continue
 		}
-		payload := buf[4:length]
-		if version == 1 && msgType == 3 { // PCReq
-			// Parse PCReq
-			requestID, src, dst := m.parsePCReq(payload)
-			// Compute path
-			sids := m.computePath(src, dst)
-			// Send PCRep
-			response := m.createPCRep(requestID, sids)
-			conn.Write(response)
+		payload := make([]byte, length-4)
+		copy(payload, buf[4:length])
+		if version == 1 {
+			if msgType == 1 { // Open
+				if len(payload) >= 8 {
+					sessionID = payload[4]
+					openReceived = true
+					// Send Open response
+					response := []byte{0x20, 0x00, 0x01, 0x00, 0x0c, 0x01, 0x10, 0x00, 0x08, sessionID, 0x00, 0x00}
+					conn.Write(response)
+				}
+			} else if msgType == 3 && openReceived { // PCReq
+				// Handle PCReq concurrently
+				go m.handlePCReq(conn, payload, sessionID)
+			}
 		}
 		// Handle other messages if needed
 	}
+}
+
+// handlePCReq processes a PCReq message concurrently.
+func (m *MockPceServer) handlePCReq(conn net.Conn, payload []byte, sessionID uint8) {
+	requestID, src, dst := m.parsePCReq(payload)
+	m.spf.CurrentSessionInfo = spf.SessionInfo{SessionID: sessionID, RequestID: requestID}
+	req := PathRequest{Src: src, Dst: dst, Response: make(chan []string, 1)}
+	m.pathRequests <- req
+	sids := <-req.Response
+	response := m.createPCRep(requestID, sids)
+	conn.Write(response)
 }
 
 // HandleRequest simulates handling a request from a client.
@@ -208,12 +251,12 @@ func main() {
 	db.AddLink(&spf.Link{InfId: "lnkB", SrcNode: 2, DstNode: 1, Sid: "2001:db8::2"})
 	spf.GlobalLSDB = db
 
-	s := spf.NewSpf(1, 1)
+	s := spf.NewSpf(1000, 1000)
 	s.Start()
 	defer s.Stop()
 
 	// Start the mock PCE server
-	server := NewMockPceServer()
+	server := NewMockPceServer(s)
 	server.Start()
 
 	// create a synthetic BGP update (SRP ID currently unused)

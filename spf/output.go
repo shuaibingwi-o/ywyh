@@ -26,7 +26,7 @@ func NewPCUpd(srpID uint32, lspLen uint16) *pcep.PCUpdMessage {
 // PackPCUpd handles a received BGP update by applying it to the LSDB,
 // attempting a representative path calculation, and returning a
 // `pcep.PCUpdMessage` populated with SRP and LSP information.
-func PackPCUpd(m *bgp.BGPMessage) *pcep.PCUpdMessage {
+func PackPCUpd(s *Spf, m *bgp.BGPMessage) *pcep.PCUpdMessage {
 	if m == nil {
 		return nil
 	}
@@ -52,8 +52,16 @@ func PackPCUpd(m *bgp.BGPMessage) *pcep.PCUpdMessage {
 		}
 	}
 
-	// TODO: implement per-session SRP ID management. For now always use 0.
-	srpID := uint32(0)
+	// Use SRP ID based on current session, increment per message per session
+	if s.nextSrpIDs == nil {
+		s.nextSrpIDs = make(map[uint8]uint32)
+	}
+	sessionID := s.CurrentSessionInfo.SessionID
+	if _, ok := s.nextSrpIDs[sessionID]; !ok {
+		s.nextSrpIDs[sessionID] = 0
+	}
+	srpID := (uint32(sessionID) << 12) | s.nextSrpIDs[sessionID]
+	s.nextSrpIDs[sessionID]++
 	pc := NewPCUpd(srpID, uint16(lspLen))
 
 	// Compute representative path and collect SRv6 SIDs from the LSDB links.

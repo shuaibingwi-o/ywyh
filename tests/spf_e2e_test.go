@@ -39,7 +39,7 @@ func TestSpfE2E_LoadAndSaveLSDB(t *testing.T) {
 	spf.SaveLSDB(persisted)
 
 	// Start Spf: Start should detect lsdb.json and load it into GlobalLSDB
-	s := spf.NewSpf(1, 1)
+	s := spf.NewSpf(1000, 1000)
 	s.Start()
 
 	// verify loaded link exists
@@ -52,7 +52,7 @@ func TestSpfE2E_LoadAndSaveLSDB(t *testing.T) {
 
 	// Directly call PackPCUpd with a BGP message (SRP ID currently unused).
 	m := &bgp.BGPMessage{}
-	pc := spf.PackPCUpd(m)
+	pc := spf.PackPCUpd(s, m)
 	if pc == nil {
 		t.Fatal("PackPCUpd returned nil")
 	}

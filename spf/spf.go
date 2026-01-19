@@ -17,22 +17,32 @@ import (
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
+// SessionInfo holds session and request identifiers.
+type SessionInfo struct {
+	SessionID uint8
+	RequestID uint32
+}
+
 // Spf holds the pipeline channels and context.
 type Spf struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	BgpUpdates chan *bgp.BGPMessage
-	SrPaths    chan *pcep.PCUpdMessage
+	ctx                context.Context
+	cancel             context.CancelFunc
+	BgpUpdates         chan *bgp.BGPMessage
+	SrPaths            chan *pcep.PCUpdMessage
+	CurrentSessionInfo SessionInfo
+	nextSrpIDs         map[uint8]uint32
 }
 
 // NewSpf creates a new Spf instance with provided buffer sizes.
 func NewSpf(bufIn, bufOut int) *Spf {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Spf{
-		ctx:        ctx,
-		cancel:     cancel,
-		BgpUpdates: make(chan *bgp.BGPMessage, bufIn),
-		SrPaths:    make(chan *pcep.PCUpdMessage, bufOut),
+		ctx:                ctx,
+		cancel:             cancel,
+		BgpUpdates:         make(chan *bgp.BGPMessage, bufIn),
+		SrPaths:            make(chan *pcep.PCUpdMessage, bufOut),
+		CurrentSessionInfo: SessionInfo{},
+		nextSrpIDs:         make(map[uint8]uint32),
 	}
 }
 
@@ -72,7 +82,7 @@ func (s *Spf) eventLoop() {
 				// Skip sending any PCUpd when the LSDB was not modified.
 				continue
 			}
-			pcMsg = PackPCUpd(m)
+			pcMsg = PackPCUpd(s, m)
 			select {
 			case s.SrPaths <- pcMsg:
 			case <-s.ctx.Done():

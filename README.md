@@ -1,8 +1,8 @@
 # ywyh PCE (spf)
 
-Minimal proof-of-concept PCE / SPF pipeline.
+Minimal proof-of-concept PCE / SPF pipeline with PCEP server support.
 
-Usage summary
+## Usage Summary
 
 - Create or load an `LSDB` and set `spf.GlobalLSDB` if desired.
 - Create an `Spf` with `spf.NewSpf(inBuf, outBuf)` and call `Start()`.
@@ -14,7 +14,7 @@ Usage summary
     3. construct a `PCUpd` and emit it on `s.SrPaths` (only when the
      LSDB changed, or for synthetic test messages).
 
-Example
+## Example
 
 ```go
 package main
@@ -32,7 +32,7 @@ func main() {
     db.AddLink(&spf.Link{InfId: "lnk2"})
     spf.GlobalLSDB = db
 
-    s := spf.NewSpf(1, 1)
+    s := spf.NewSpf(1000, 1000)
     s.Start()
     defer s.Stop()
 
@@ -56,3 +56,17 @@ func main() {
 
 See the `spf` package for details on `ApplyBGPUpdateToLSDB`, path
 calculation and `PCUpd` packaging.
+
+## PCE Server Example
+
+For a complete PCEP server implementation, see `examples/pce_server.go`. It demonstrates:
+- Listening for PCEP connections on port 4189.
+- Handling PCEP Open, PCReq, and PCRep messages.
+- Concurrent path computation using a worker pool.
+- Integration with the SPF pipeline for PCUpd generation.
+
+Build and run with:
+```bash
+go build ./examples/pce_server.go
+./pce_server
+```

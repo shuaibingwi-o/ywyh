@@ -46,7 +46,7 @@ func TestSpfTableDriven(t *testing.T) {
 				spf.GlobalLSDB.AddLink(&spf.Link{InfId: id})
 			}
 
-			s := spf.NewSpf(1, 1)
+			s := spf.NewSpf(1000, 1000)
 			s.Start()
 			defer s.Stop()
 
@@ -57,7 +57,7 @@ func TestSpfTableDriven(t *testing.T) {
 			// SRP identifier. This avoids depending on the internal
 			// event loop while still exercising output construction.
 			m := &bgp.BGPMessage{}
-			pc := spf.PackPCUpd(m)
+			pc := spf.PackPCUpd(s, m)
 			if pc == nil {
 				t.Fatal("PackPCUpd returned nil")
 			}
