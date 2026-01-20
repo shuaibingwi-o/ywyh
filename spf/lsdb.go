@@ -14,8 +14,10 @@ package spf
 import (
 	"container/heap"
 	"errors"
+	"fmt"
 	"math"
 	"os"
+	"runtime"
 	"sync"
 )
 
@@ -336,6 +338,19 @@ func ValidateLink(link *Link) bool {
 
 // CalculatePath computes the shortest path using Dijkstra's algorithm
 func (db *LSDB) CalculatePath(src, dst uint32, metric MetricType) (*PathResult, error) {
+	// Print call stack for LSDB operation
+	fmt.Println("LSDB CalculatePath called, call stack:")
+	pc := make([]uintptr, 10)
+	n := runtime.Callers(2, pc)
+	frames := runtime.CallersFrames(pc[:n])
+	for {
+		frame, more := frames.Next()
+		fmt.Printf("  %s:%d %s\n", frame.File, frame.Line, frame.Function)
+		if !more {
+			break
+		}
+	}
+
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 

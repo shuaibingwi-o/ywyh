@@ -205,6 +205,7 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 		copy(payload, buf[4:length])
 		if version == 1 {
 			if msgType == 1 { // Open
+				fmt.Printf("Received PCEP Open message, length: %d\n", length)
 				if len(payload) >= 8 {
 					sessionID = payload[4]
 					openReceived = true
@@ -213,42 +214,40 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 					conn.Write(response)
 				}
 			} else if msgType == 3 && openReceived { // PCReq
+				fmt.Printf("Received PCEP PCReq message, length: %d\n", length)
 				// Handle PCReq concurrently
 				go m.handlePCReq(conn, payload, sessionID)
+			} else {
+				fmt.Printf("Received PCEP message type: %d, length: %d\n", msgType, length)
 			}
+		} else {
+			fmt.Printf("Received non-PCEP message, version: %d, type: %d, length: %d\n", version, msgType, length)
 		}
-		// Handle other messages if needed
 	}
 }
 
 // handlePCReq processes a PCReq message concurrently.
 func (m *MockPceServer) handlePCReq(conn net.Conn, payload []byte, sessionID uint8) {
 	requestID, src, dst := m.parsePCReq(payload)
+	fmt.Printf("Parsed PCReq: requestID=%d, src=%d, dst=%d\n", requestID, src, dst)
 	m.spf.CurrentSessionInfo = spf.SessionInfo{SessionID: sessionID, RequestID: requestID}
 	req := PathRequest{Src: src, Dst: dst, Response: make(chan []string, 1)}
-	m.pathRequests <- req
-	sids := <-req.Response
-	response := m.createPCRep(requestID, sids)
-	conn.Write(response)
-}
-
-// HandleRequest simulates handling a request from a client.
-func (m *MockPceServer) HandleRequest(request string) string {
-	// Handle PCReq and send PCRep
-	if request == "PCReq" {
-		return "PCRep: Response to PCReq"
-	}
-	return "Unknown request"
+	m.pathRequests <- req // Block until space in queue
+	go func() {
+		sids := <-req.Response
+		response := m.createPCRep(requestID, sids)
+		conn.Write(response)
+	}()
 }
 
 // Basic example: construct a small LSDB, start the Spf pipeline,
 // send a BGP update and print the produced SRv6Paths.
 func main() {
 	db := spf.NewLSDB()
-	db.AddNode(&spf.Node{RouterId: 1})
-	db.AddNode(&spf.Node{RouterId: 2})
-	db.AddLink(&spf.Link{InfId: "lnkA", SrcNode: 1, DstNode: 2, Sid: "2001:db8::1"})
-	db.AddLink(&spf.Link{InfId: "lnkB", SrcNode: 2, DstNode: 1, Sid: "2001:db8::2"})
+	//	db.AddNode(&spf.Node{RouterId: 1})
+	//	db.AddNode(&spf.Node{RouterId: 2})
+	//	db.AddLink(&spf.Link{InfId: "lnkA", SrcNode: 1, DstNode: 2, Sid: "2001:db8::1"})
+	//	db.AddLink(&spf.Link{InfId: "lnkB", SrcNode: 2, DstNode: 1, Sid: "2001:db8::2"})
 	spf.GlobalLSDB = db
 
 	s := spf.NewSpf(1000, 1000)
@@ -271,7 +270,7 @@ func main() {
 			return
 		}
 		fmt.Println("received PCEP message")
-	case <-time.After(1 * time.Second):
+	case <-time.After(10000 * time.Second):
 		fmt.Println("timeout waiting for PCUpd")
 	}
 
