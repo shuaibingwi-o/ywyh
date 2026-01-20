@@ -33,9 +33,11 @@ func TestSpfE2E_LoadAndSaveLSDB(t *testing.T) {
 		t.Fatalf("Chdir failed: %v", err)
 	}
 
-	// create persisted LSDB with a single link
+	// create persisted LSDB with nodes and a link
 	persisted := spf.NewLSDB()
-	persisted.AddLink(&spf.Link{InfId: "initial"})
+	persisted.AddNode(&spf.Node{RouterId: 1})
+	persisted.AddNode(&spf.Node{RouterId: 2})
+	persisted.AddLink(&spf.Link{InfId: "initial", SrcNode: 1, DstNode: 2, Sid: "2001:db8::1", Status: true})
 	spf.SaveLSDB(persisted)
 
 	// Start Spf: Start should detect lsdb.json and load it into GlobalLSDB
@@ -48,13 +50,13 @@ func TestSpfE2E_LoadAndSaveLSDB(t *testing.T) {
 	}
 
 	// mutate the in-memory LSDB and send an update through the pipeline
-	spf.GlobalLSDB.AddLink(&spf.Link{InfId: "dynamic"})
+	spf.GlobalLSDB.AddLink(&spf.Link{InfId: "dynamic", SrcNode: 2, DstNode: 1, Sid: "2001:db8::2", Status: true})
 
 	// Directly call PackPCUpd with a BGP message (SRP ID currently unused).
 	m := &bgp.BGPMessage{}
-	pc := spf.PackPCUpd(s, m)
-	if pc == nil {
-		t.Fatal("PackPCUpd returned nil")
+	pcMsgs := spf.PackPCUpd(s, m)
+	if len(pcMsgs) == 0 {
+		t.Fatal("PackPCUpd returned empty slice")
 	}
 
 	// Stop should save the current GlobalLSDB to lsdb.json

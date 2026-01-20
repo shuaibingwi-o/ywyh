@@ -15,10 +15,12 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"time"
 
 	"ywyh/spf"
 
+	"github.com/nttcom/pola/pkg/packet/pcep"
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
@@ -243,11 +245,18 @@ func (m *MockPceServer) handlePCReq(conn net.Conn, payload []byte, sessionID uin
 // Basic example: construct a small LSDB, start the Spf pipeline,
 // send a BGP update and print the produced SRv6Paths.
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Println("Usage: go run pce_server.go <srv6-sid>")
+		os.Exit(1)
+	}
+
+	paramSID := os.Args[1]
+
 	db := spf.NewLSDB()
-	//	db.AddNode(&spf.Node{RouterId: 1})
-	//	db.AddNode(&spf.Node{RouterId: 2})
-	//	db.AddLink(&spf.Link{InfId: "lnkA", SrcNode: 1, DstNode: 2, Sid: "2001:db8::1"})
-	//	db.AddLink(&spf.Link{InfId: "lnkB", SrcNode: 2, DstNode: 1, Sid: "2001:db8::2"})
+	db.AddNode(&spf.Node{RouterId: 1})
+	db.AddNode(&spf.Node{RouterId: 2})
+	db.AddLink(&spf.Link{InfId: "lnkA", SrcNode: 1, DstNode: 2, Sid: paramSID, Status: true, Delay: 10, Loss: 0.01})
+	db.AddLink(&spf.Link{InfId: "lnkB", SrcNode: 2, DstNode: 1, Sid: "2001:db8::2", Status: true, Delay: 10, Loss: 0.01})
 	spf.GlobalLSDB = db
 
 	s := spf.NewSpf(1000, 1000)
@@ -258,22 +267,169 @@ func main() {
 	server := NewMockPceServer(s)
 	server.Start()
 
-	// create a synthetic BGP update (SRP ID currently unused)
-	msg := &bgp.BGPMessage{}
+	// Construct BGP-LS BGP UPDATE message
+	msg := constructBGPLSUpdate(paramSID)
+	fmt.Println("Sending BGP-LS UPDATE to SPF")
 	// send the parsed BGP message into the pipeline
 	s.BgpUpdates <- msg
 
+	// Wait for PCUpd from SPF
 	select {
-	case p := <-s.SrPaths:
-		if p == nil {
-			fmt.Println("received nil PCEP message")
+	case pcUpd := <-s.SrPaths:
+		if pcUpd == nil {
+			fmt.Println("Received nil PCUpd message")
 			return
 		}
-		fmt.Println("received PCEP message")
+		fmt.Println("Received PCUpd message from SPF (first)")
+		// Extract SRP ID and SRv6 SIDs from PCUpd and send to PCC
+		srpID := uint32(0)
+		if pcUpd.SrpObject != nil {
+			srpID = pcUpd.SrpObject.SrpID
+		}
+		if pcUpd.EroObject != nil {
+			for _, subobj := range pcUpd.EroObject.EroSubobjects {
+				if srv6Sub, ok := subobj.(*pcep.SRv6EroSubobject); ok {
+					sid := srv6Sub.Segment.Sid.String()
+					if sid != "" {
+						sendPCUpdToPCC("192.168.15.132:4189", srpID, sid)
+					}
+				}
+			}
+		}
 	case <-time.After(10000 * time.Second):
-		fmt.Println("timeout waiting for PCUpd")
+		fmt.Println("Timeout waiting for PCUpd from SPF")
+	}
+
+	// Send the same UPDATE again
+	fmt.Println("Sending second BGP-LS UPDATE to SPF")
+	s.BgpUpdates <- msg
+
+	// Wait for PCUpd from SPF
+	select {
+	case pcUpd := <-s.SrPaths:
+		if pcUpd == nil {
+			fmt.Println("Received nil PCUpd message (second)")
+		} else {
+			fmt.Println("Received PCUpd message from SPF (second) - path changed")
+			// Extract SRP ID and send
+			if pcUpd.SrpObject != nil {
+				// Send if needed
+			}
+		}
+	case <-time.After(5000 * time.Second):
+		fmt.Println("No PCUpd for second UPDATE - path did not change")
 	}
 
 	// Simulate server running
 	time.Sleep(2 * time.Second)
+}
+
+func constructBGPLSUpdate(srv6SID string) *bgp.BGPMessage {
+	// Construct a proper BGP-LS UPDATE message with Link-State NLRI and SRv6 SID
+
+	// Create LS Link NLRI
+	localDesc := &bgp.LsNodeDescriptor{
+		Asn:         65000,
+		BGPRouterID: netip.MustParseAddr("1.1.1.1"),
+	}
+	remoteDesc := &bgp.LsNodeDescriptor{
+		Asn:         65000,
+		BGPRouterID: netip.MustParseAddr("2.2.2.2"),
+	}
+	localNodeTLV := bgp.NewLsTLVNodeDescriptor(localDesc, bgp.LS_TLV_LOCAL_NODE_DESC)
+	remoteNodeTLV := bgp.NewLsTLVNodeDescriptor(remoteDesc, bgp.LS_TLV_REMOTE_NODE_DESC)
+	linkNLRI := &bgp.LsLinkNLRI{
+		LocalNodeDesc:  &localNodeTLV,
+		RemoteNodeDesc: &remoteNodeTLV,
+		LinkDesc: []bgp.LsTLVInterface{
+			&bgp.LsTLVSrv6EndXSID{
+				EndpointBehavior: 0x11,
+				Flags:            0,
+				Algorithm:        0,
+				Weight:           0,
+				SIDs:             []netip.Addr{netip.MustParseAddr(srv6SID)},
+			},
+		},
+	}
+
+	lsAddrPrefix := &bgp.LsAddrPrefix{
+		Type: bgp.LS_NLRI_TYPE_LINK,
+		NLRI: linkNLRI,
+	}
+
+	// Create BGP UPDATE message
+	update := bgp.NewBGPUpdateMessage([]bgp.PathNLRI{{NLRI: lsAddrPrefix}}, nil, nil)
+
+	return update
+}
+
+func sendPCUpdToPCC(addr string, srpID uint32, srv6SID string) {
+	// Construct PCUpd message
+	msg := constructPCUpd(srpID, srv6SID)
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		fmt.Println("Error connecting to PCC:", err)
+		return
+	}
+	defer conn.Close()
+
+	_, err = conn.Write(msg)
+	if err != nil {
+		fmt.Println("Error sending PCUpd:", err)
+		return
+	}
+
+	fmt.Println("PCUpd sent to PCC successfully")
+}
+
+func constructPCUpd(srpID uint32, srv6SID string) []byte {
+	// Similar to basic_example.go
+	// PCUpd message: version 1, flags 0, type 10 (PCUpd), length
+	// Objects: SRP, LSP, ERO
+
+	// SRP object
+	srpObj := make([]byte, 12)
+	srpObj[0] = 33   // class
+	srpObj[1] = 0x10 // type 1, flags 0
+	binary.BigEndian.PutUint16(srpObj[2:4], 12)
+	binary.BigEndian.PutUint32(srpObj[4:8], srpID)
+
+	// LSP object
+	lspObj := make([]byte, 16)
+	lspObj[0] = 32
+	lspObj[1] = 0x10
+	binary.BigEndian.PutUint16(lspObj[2:4], 16)
+	lspObj[4] = 0
+	binary.BigEndian.PutUint16(lspObj[5:7], 1)
+
+	// ERO object
+	eroLen := 4 + 22
+	eroObj := make([]byte, eroLen)
+	eroObj[0] = 7
+	eroObj[1] = 0x10
+	binary.BigEndian.PutUint16(eroObj[2:4], uint16(eroLen))
+	eroObj[4] = 40
+	eroObj[5] = 22
+	eroObj[6] = 0
+	eroObj[7] = 0
+	if addr, err := netip.ParseAddr(srv6SID); err == nil && addr.Is6() {
+		copy(eroObj[8:24], addr.AsSlice())
+	}
+	eroObj[24] = 0x11
+
+	totalLen := 4 + len(srpObj) + len(lspObj) + len(eroObj)
+	buf := make([]byte, totalLen)
+	buf[0] = 0x20
+	buf[2] = 10
+	binary.BigEndian.PutUint16(buf[3:5], uint16(totalLen))
+
+	offset := 4
+	copy(buf[offset:], srpObj)
+	offset += len(srpObj)
+	copy(buf[offset:], lspObj)
+	offset += len(lspObj)
+	copy(buf[offset:], eroObj)
+
+	return buf
 }

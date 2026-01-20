@@ -31,6 +31,7 @@ type Spf struct {
 	SrPaths            chan *pcep.PCUpdMessage
 	CurrentSessionInfo SessionInfo
 	nextSrpIDs         map[uint8]uint32
+	previousPaths      map[string]*PathResult // key: src-dst, value: previous path
 }
 
 // NewSpf creates a new Spf instance with provided buffer sizes.
@@ -43,6 +44,7 @@ func NewSpf(bufIn, bufOut int) *Spf {
 		SrPaths:            make(chan *pcep.PCUpdMessage, bufOut),
 		CurrentSessionInfo: SessionInfo{},
 		nextSrpIDs:         make(map[uint8]uint32),
+		previousPaths:      make(map[string]*PathResult),
 	}
 }
 
@@ -77,16 +79,17 @@ func (s *Spf) eventLoop() {
 			// did not modify the LSDB, skip PCUpd construction and
 			// avoid sending a message to consumers.
 			changed := ApplyBGPUpdateToLSDB(m)
-			var pcMsg *pcep.PCUpdMessage
 			if !changed {
 				// Skip sending any PCUpd when the LSDB was not modified.
 				continue
 			}
-			pcMsg = PackPCUpd(s, m)
-			select {
-			case s.SrPaths <- pcMsg:
-			case <-s.ctx.Done():
-				return
+			pcMsgs := PackPCUpd(s, m)
+			for _, pcMsg := range pcMsgs {
+				select {
+				case s.SrPaths <- pcMsg:
+				case <-s.ctx.Done():
+					return
+				}
 			}
 		}
 	}

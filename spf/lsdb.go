@@ -351,6 +351,10 @@ func (db *LSDB) CalculatePath(src, dst uint32, metric MetricType) (*PathResult, 
 		}
 	}
 
+	fmt.Printf("Calculating path from %d to %d\n", src, dst)
+	fmt.Printf("Nodes: %+v\n", db.Nodes)
+	fmt.Printf("Topology: %+v\n", db.Topology)
+
 	db.mu.RLock()
 	defer db.mu.RUnlock()
 

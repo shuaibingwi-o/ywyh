@@ -41,9 +41,13 @@ func TestSpfTableDriven(t *testing.T) {
 			}
 
 			spf.GlobalLSDB = spf.NewLSDB()
+			spf.GlobalLSDB.AddNode(&spf.Node{RouterId: 1})
+			spf.GlobalLSDB.AddNode(&spf.Node{RouterId: 2})
 			for i := 0; i < tc.links; i++ {
 				id := fmt.Sprintf("lnk%d", i)
-				spf.GlobalLSDB.AddLink(&spf.Link{InfId: id})
+				spf.GlobalLSDB.AddLink(&spf.Link{InfId: id, SrcNode: 1, DstNode: 2, Sid: fmt.Sprintf("2001:db8::%d", i+1), Status: true})
+				id2 := fmt.Sprintf("lnk%d_rev", i)
+				spf.GlobalLSDB.AddLink(&spf.Link{InfId: id2, SrcNode: 2, DstNode: 1, Sid: fmt.Sprintf("2001:db8::%d", i+100), Status: true})
 			}
 
 			s := spf.NewSpf(1000, 1000)
@@ -57,9 +61,9 @@ func TestSpfTableDriven(t *testing.T) {
 			// SRP identifier. This avoids depending on the internal
 			// event loop while still exercising output construction.
 			m := &bgp.BGPMessage{}
-			pc := spf.PackPCUpd(s, m)
-			if pc == nil {
-				t.Fatal("PackPCUpd returned nil")
+			pcMsgs := spf.PackPCUpd(s, m)
+			if tc.links > 0 && len(pcMsgs) == 0 {
+				t.Fatal("PackPCUpd returned empty slice")
 			}
 		})
 	}
