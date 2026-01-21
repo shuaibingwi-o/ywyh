@@ -306,16 +306,20 @@ func main() {
 		srpID := uint32(0)
 		if pcUpd.SrpObject != nil {
 			srpID = pcUpd.SrpObject.SrpID
+			fmt.Printf("PCUpd SRP ID: %d\n", srpID)
 		}
-		if pcUpd.EroObject != nil {
+		if pcUpd.EroObject != nil && len(pcUpd.EroObject.EroSubobjects) > 0 {
 			for _, subobj := range pcUpd.EroObject.EroSubobjects {
 				if srv6Sub, ok := subobj.(*pcep.SRv6EroSubobject); ok {
 					sid := srv6Sub.Segment.Sid.String()
 					if sid != "" {
+						fmt.Printf("Sending PCUpd to PCC with SID: %s\n", sid)
 						sendPCUpdToPCC("192.168.15.132:4189", srpID, sid)
 					}
 				}
 			}
+		} else {
+			fmt.Println("PCUpd has no ERO subobjects, skipping send to PCC")
 		}
 	case <-time.After(10000 * time.Second):
 		fmt.Println("Timeout waiting for PCUpd from SPF")
@@ -385,21 +389,24 @@ func constructBGPLSUpdate(srv6SID string) *bgp.BGPMessage {
 }
 
 func sendPCUpdToPCC(addr string, srpID uint32, srv6SID string) {
+	fmt.Printf("Attempting to send PCUpd to PCC at %s with SRP ID %d and SID %s\n", addr, srpID, srv6SID)
 	// Construct PCUpd message
 	msg := constructPCUpd(srpID, srv6SID)
 
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		fmt.Println("Error connecting to PCC:", err)
+		fmt.Printf("Error connecting to PCC at %s: %v\n", addr, err)
 		return
 	}
 	defer conn.Close()
 
 	_, err = conn.Write(msg)
 	if err != nil {
-		fmt.Println("Error sending PCUpd:", err)
+		fmt.Printf("Error sending PCUpd to PCC: %v\n", err)
 		return
 	}
+	fmt.Printf("Successfully sent PCUpd to PCC at %s\n", addr)
+}
 
 	fmt.Println("PCUpd sent to PCC successfully")
 }
