@@ -278,11 +278,6 @@ func main() {
 		lsp, _ := pcep.NewLSPObject("", nil, 0)
 		pc.LSPObject = lsp
 		ero := &pcep.EroObject{ObjectType: pcep.ObjectTypeEROExplicitRoute, EroSubobjects: []pcep.EroSubobject{}}
-		if addr, err := netip.ParseAddr(paramSID); err == nil && addr.Is6() {
-			sid := pcep.SRv6SID{Sid: addr}
-			subobj := pcep.SRv6EroSubobject{Segment: sid}
-			ero.EroSubobjects = append(ero.EroSubobjects, subobj)
-		}
 		pc.EroObject = ero
 		fmt.Println("Sending test PCUpd")
 		select {
