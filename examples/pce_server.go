@@ -16,11 +16,9 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"time"
 
 	"ywyh/spf"
 
-	"github.com/nttcom/pola/pkg/packet/pcep"
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
@@ -252,101 +250,10 @@ func main() {
 
 	paramSID := os.Args[1]
 
-	db := spf.NewLSDB()
-	db.AddNode(&spf.Node{RouterId: 1})
-	db.AddNode(&spf.Node{RouterId: 2})
-	db.AddLink(&spf.Link{InfId: "lnkA", SrcNode: 1, DstNode: 2, Sid: paramSID, Status: true, Delay: 10, Loss: 0.01})
-	db.AddLink(&spf.Link{InfId: "lnkB", SrcNode: 2, DstNode: 1, Sid: "2001:db8::2", Status: true, Delay: 10, Loss: 0.01})
-	spf.GlobalLSDB = db
-
-	s := spf.NewSpf(1000, 1000)
-	s.Start()
-	defer s.Stop()
-
-	// Start the mock PCE server
-	server := NewMockPceServer(s)
-	server.Start()
-
-	// Send a test PCUpd
-	go func() {
-		time.Sleep(1 * time.Second)
-		srpID := uint32(1)
-		pc := &pcep.PCUpdMessage{}
-		pst := &pcep.PathSetupType{PathSetupType: pcep.PathSetupTypeSRv6TE}
-		srp := &pcep.SrpObject{ObjectType: pcep.ObjectTypeSRPSRP, RFlag: false, SrpID: srpID, TLVs: []pcep.TLVInterface{pst}}
-		pc.SrpObject = srp
-		lsp, _ := pcep.NewLSPObject("", nil, 0)
-		pc.LSPObject = lsp
-		ero := &pcep.EroObject{ObjectType: pcep.ObjectTypeEROExplicitRoute, EroSubobjects: []pcep.EroSubobject{}}
-		pc.EroObject = ero
-		fmt.Println("Sending test PCUpd")
-		select {
-		case s.SrPaths <- pc:
-			fmt.Println("PCUpd sent")
-		case <-time.After(5 * time.Second):
-			fmt.Println("Timeout sending PCUpd")
-		}
-	}()
-
-	// Construct BGP-LS BGP UPDATE message
-	msg := constructBGPLSUpdate(paramSID)
-	fmt.Println("Sending BGP-LS UPDATE to SPF")
-	// send the parsed BGP message into the pipeline
-	s.BgpUpdates <- msg
-
-	// Wait for PCUpd from SPF
-	select {
-	case pcUpd := <-s.SrPaths:
-		if pcUpd == nil {
-			fmt.Println("Received nil PCUpd message")
-			return
-		}
-		fmt.Println("Received PCUpd message from SPF (first)")
-		// Extract SRP ID and SRv6 SIDs from PCUpd and send to PCC
-		srpID := uint32(0)
-		if pcUpd.SrpObject != nil {
-			srpID = pcUpd.SrpObject.SrpID
-			fmt.Printf("PCUpd SRP ID: %d\n", srpID)
-		}
-		if pcUpd.EroObject != nil && len(pcUpd.EroObject.EroSubobjects) > 0 {
-			for _, subobj := range pcUpd.EroObject.EroSubobjects {
-				if srv6Sub, ok := subobj.(*pcep.SRv6EroSubobject); ok {
-					sid := srv6Sub.Segment.Sid.String()
-					if sid != "" {
-						fmt.Printf("Sending PCUpd to PCC with SID: %s\n", sid)
-						sendPCUpdToPCC("192.168.15.132:4189", srpID, sid)
-					}
-				}
-			}
-		} else {
-			fmt.Println("PCUpd has no ERO subobjects, skipping send to PCC")
-		}
-	case <-time.After(10000 * time.Second):
-		fmt.Println("Timeout waiting for PCUpd from SPF")
-	}
-
-	// Send the same UPDATE again
-	fmt.Println("Sending second BGP-LS UPDATE to SPF")
-	s.BgpUpdates <- msg
-
-	// Wait for PCUpd from SPF
-	select {
-	case pcUpd := <-s.SrPaths:
-		if pcUpd == nil {
-			fmt.Println("Received nil PCUpd message (second)")
-		} else {
-			fmt.Println("Received PCUpd message from SPF (second) - path changed")
-			// Extract SRP ID and send
-			if pcUpd.SrpObject != nil {
-				// Send if needed
-			}
-		}
-	case <-time.After(5000 * time.Second):
-		fmt.Println("No PCUpd for second UPDATE - path did not change")
-	}
-
-	// Simulate server running
-	time.Sleep(2 * time.Second)
+	// Directly send a mock PCUpd to PCC
+	srpID := uint32(1)
+	fmt.Printf("Sending mock PCUpd to PCC with SID: %s\n", paramSID)
+	sendPCUpdToPCC("192.168.15.132:4189", srpID, paramSID)
 }
 
 func constructBGPLSUpdate(srv6SID string) *bgp.BGPMessage {
@@ -388,7 +295,7 @@ func constructBGPLSUpdate(srv6SID string) *bgp.BGPMessage {
 	return update
 }
 
-func sendPCUpdToPCC(addr string, srpID uint32, srv6SID string) {
+func sendPCUpdToPCC(addr string, srpID uint32, srv6SID string) bool {
 	fmt.Printf("Attempting to send PCUpd to PCC at %s with SRP ID %d and SID %s\n", addr, srpID, srv6SID)
 	// Construct PCUpd message
 	msg := constructPCUpd(srpID, srv6SID)
@@ -396,19 +303,17 @@ func sendPCUpdToPCC(addr string, srpID uint32, srv6SID string) {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		fmt.Printf("Error connecting to PCC at %s: %v\n", addr, err)
-		return
+		return false
 	}
 	defer conn.Close()
 
 	_, err = conn.Write(msg)
 	if err != nil {
 		fmt.Printf("Error sending PCUpd to PCC: %v\n", err)
-		return
+		return false
 	}
 	fmt.Printf("Successfully sent PCUpd to PCC at %s\n", addr)
-}
-
-	fmt.Println("PCUpd sent to PCC successfully")
+	return true
 }
 
 func constructPCUpd(srpID uint32, srv6SID string) []byte {
