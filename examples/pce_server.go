@@ -267,6 +267,32 @@ func main() {
 	server := NewMockPceServer(s)
 	server.Start()
 
+	// Send a test PCUpd
+	go func() {
+		time.Sleep(1 * time.Second)
+		srpID := uint32(1)
+		pc := &pcep.PCUpdMessage{}
+		pst := &pcep.PathSetupType{PathSetupType: pcep.PathSetupTypeSRv6TE}
+		srp := &pcep.SrpObject{ObjectType: pcep.ObjectTypeSRPSRP, RFlag: false, SrpID: srpID, TLVs: []pcep.TLVInterface{pst}}
+		pc.SrpObject = srp
+		lsp, _ := pcep.NewLSPObject("", nil, 0)
+		pc.LSPObject = lsp
+		ero := &pcep.EroObject{ObjectType: pcep.ObjectTypeEROExplicitRoute, EroSubobjects: []pcep.EroSubobject{}}
+		if addr, err := netip.ParseAddr(paramSID); err == nil && addr.Is6() {
+			sid := pcep.SRv6SID{Sid: addr}
+			subobj := pcep.SRv6EroSubobject{Segment: sid}
+			ero.EroSubobjects = append(ero.EroSubobjects, subobj)
+		}
+		pc.EroObject = ero
+		fmt.Println("Sending test PCUpd")
+		select {
+		case s.SrPaths <- pc:
+			fmt.Println("PCUpd sent")
+		case <-time.After(5 * time.Second):
+			fmt.Println("Timeout sending PCUpd")
+		}
+	}()
+
 	// Construct BGP-LS BGP UPDATE message
 	msg := constructBGPLSUpdate(paramSID)
 	fmt.Println("Sending BGP-LS UPDATE to SPF")
