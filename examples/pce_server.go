@@ -253,7 +253,7 @@ func main() {
 	// Directly send a mock PCUpd to PCC
 	srpID := uint32(1)
 	fmt.Printf("Sending mock PCUpd to PCC with SID: %s\n", paramSID)
-	sendPCUpdToPCC("192.168.15.132:4189", srpID, paramSID)
+	sendPCUpdToPCC("[2001:db8:1::2]:4189", srpID, paramSID)
 }
 
 func constructBGPLSUpdate(srv6SID string) *bgp.BGPMessage {
