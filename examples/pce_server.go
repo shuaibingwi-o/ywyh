@@ -249,6 +249,7 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 	var sessionID uint8
 	var openReceived bool
 	var keepaliveStarted bool
+	var pcUpdSent bool
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
@@ -319,79 +320,14 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 					sidMu.Unlock()
 
 					if acceptOpen {
-						// Reply with same TLVs but ensure PATH_SETUP_TYPE_CAPABILITY (type 0x22) present
-						respPayload := make([]byte, 0, len(payload)+16)
-						respPayload = append(respPayload, payload...)
-						// Ensure presence of two TLVs in the Open reply: Stateful PCE capability (0x0010)
-						// and PATH_SETUP_TYPE_CAPABILITY (0x0022). If the client included them, mirror
-						// the exact bytes. If not, append conservative defaults (but avoid appending
-						// PATH_SETUP_TYPE_CAPABILITY if you know the PCC rejects unexpected TLVs).
-						found22 := false
-						found10 := false
-						tlv22Offset := -1
-						tlv10Offset := -1
-						for i := 0; i+3 < len(payload); i++ {
-							t0 := payload[i]
-							t1 := payload[i+1]
-							if i+4 <= len(payload) {
-								tlvLen := int(binary.BigEndian.Uint16(payload[i+2 : i+4]))
-								if tlvLen >= 4 && i+tlvLen <= len(payload) {
-									if t0 == 0x00 && t1 == 0x22 {
-										found22 = true
-										tlv22Offset = i
-										fmt.Printf("Found PATH_SETUP_TYPE_CAPABILITY TLV in Open at offset %d, len=%d\n", i, tlvLen)
-									}
-									if t0 == 0x00 && t1 == 0x10 {
-										found10 = true
-										tlv10Offset = i
-										fmt.Printf("Found Stateful-PCE TLV in Open at offset %d, len=%d\n", i, tlvLen)
-									}
-									i += tlvLen - 1
-								}
-							}
-						}
-
-						// If Stateful-PCE TLV missing, append a conservative one (type 0x0010, len 8)
-						if !found10 {
-							tlv10 := []byte{0x00, 0x10, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01}
-							respPayload = append(respPayload, tlv10...)
-							tlv10Offset = len(respPayload) - len(tlv10)
-							fmt.Printf("Appended Stateful-PCE TLV at offset %d\n", tlv10Offset)
-						}
-
-						// If PATH_SETUP_TYPE_CAPABILITY present, set 4-byte server session id before it
-						if found22 {
-							if tlv22Offset >= 4 && tlv22Offset-4+4 <= len(respPayload) {
-								binary.BigEndian.PutUint32(respPayload[tlv22Offset-4:tlv22Offset], uint32(sid))
-								fmt.Printf("Set 4-byte server session id at payload offset %d\n", tlv22Offset-4)
-							}
-						} else {
-							// If absent, append a PATH_SETUP_TYPE_CAPABILITY TLV matching common PCCs
-							// Note: some PCCs reject unexpected TLVs; mirror-only is safer. We append
-							// a conservative TLV here to advertise SRv6 path-setup capability.
-							tlv22 := []byte{0x00, 0x22, 0x00, 0x10, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-							respPayload = append(respPayload, tlv22...)
-							tlv22Offset = len(respPayload) - len(tlv22)
-							// set server session id in the 4 bytes immediately before the TLV
-							if tlv22Offset >= 4 {
-								binary.BigEndian.PutUint32(respPayload[tlv22Offset-4:tlv22Offset], uint32(sid))
-								fmt.Printf("Appended PATH_SETUP_TYPE_CAPABILITY and set server session id at %d\n", tlv22Offset-4)
-							}
-						}
-
-						// set server session id at payload[4] if present (legacy/1-byte field)
-						/*
-							if len(respPayload) >= 5 {
-								respPayload[4] = sid
-							}
-						*/
-						resp := make([]byte, 4+len(respPayload))
+						// Reply by copying the client's Open payload exactly, without modifying session id or TLVs.
+						resp := make([]byte, 4+len(payload))
 						resp[0] = 0x20
 						resp[1] = 0x01
-						binary.BigEndian.PutUint16(resp[2:4], uint16(4+len(respPayload)))
-						copy(resp[4:], respPayload)
+						binary.BigEndian.PutUint16(resp[2:4], uint16(4+len(payload)))
+						copy(resp[4:], payload)
 						nw, err := conn.Write(resp)
-						fmt.Printf("Sent Open (accepted, confirmed SRv6-TE) to %s (%d bytes) err=%v bytes=% x\n", conn.RemoteAddr().String(), nw, err, resp[:nw])
+						fmt.Printf("Sent Open (echoed) to %s (%d bytes) err=%v bytes=% x\n", conn.RemoteAddr().String(), nw, err, resp[:nw])
 					} else {
 						// Echo back the received Open payload as the Open response, but set server SID
 						resp := make([]byte, 4+len(payload))
@@ -406,25 +342,7 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 						fmt.Printf("Sent Open response to %s (%d bytes) err=%v bytes=% x\n", conn.RemoteAddr().String(), nw, err, resp[:nw])
 					}
 
-					// Immediately send a PCUpd to the PCC populated with SRv6 SIDs from the LSDB.
-					db := spf.GetGlobalLSDB()
-					var sids []string
-					if db != nil {
-						for _, l := range db.Links {
-							if l != nil && l.Sid != "" {
-								sids = append(sids, l.Sid)
-							}
-						}
-					}
-					// Use SRP ID 1 for this unsolicited PCUpd after Open
-					pcupd := constructPCUpd(1, sids)
-					if len(pcupd) > 0 {
-						if _, err := conn.Write(pcupd); err != nil {
-							fmt.Printf("Error sending unsolicited PCUpd: %v\n", err)
-						} else {
-							fmt.Printf("Sent unsolicited PCUpd to %s after Open (srp=1)\n", conn.RemoteAddr().String())
-						}
-					}
+					// Do not send PCUpd immediately; send after first Keepalive instead.
 					// start periodic keepalives for this connection
 					if !keepaliveStarted {
 						keepaliveStarted = true
@@ -445,9 +363,30 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 				}
 			} else if msgType == 2 && openReceived { // Keepalive
 				fmt.Printf("Received PCEP Keepalive, length: %d\n", length)
-				// reply with Keepalive
-				ka := []byte{0x20, 0x00, 0x02, 0x00, 0x04}
+				// reply with Keepalive (version 1, type 2, length 4)
+				ka := []byte{0x20, 0x02, 0x00, 0x04}
 				conn.Write(ka)
+				// On the first Keepalive after Open, send the unsolicited PCUpd populated from LSDB
+				if !pcUpdSent {
+					db := spf.GetGlobalLSDB()
+					var sids []string
+					if db != nil {
+						for _, l := range db.Links {
+							if l != nil && l.Sid != "" {
+								sids = append(sids, l.Sid)
+							}
+						}
+					}
+					pcupd := constructPCUpd(1, sids)
+					if len(pcupd) > 0 {
+						if _, err := conn.Write(pcupd); err != nil {
+							fmt.Printf("Error sending unsolicited PCUpd after Keepalive: %v\n", err)
+						} else {
+							fmt.Printf("Sent unsolicited PCUpd to %s after first Keepalive (srp=1)\n", conn.RemoteAddr().String())
+							pcUpdSent = true
+						}
+					}
+				}
 			} else if msgType == 3 && openReceived { // PCReq
 				fmt.Printf("Received PCEP PCReq message, length: %d\n", length)
 				// Log remote PCC address/port
