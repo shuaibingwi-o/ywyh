@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
-	"net/netip"
 	"os"
 	"time"
 )
@@ -64,14 +63,14 @@ func main() {
 		binary.BigEndian.PutUint16(rp[2:4], 12)
 		binary.BigEndian.PutUint32(rp[4:8], requestID)
 
-		src := netip.MustParseAddr("1.1.1.1").As4()
-		dst := netip.MustParseAddr("2.2.2.2").As4()
+		src := net.ParseIP("1.1.1.1").To4()
+		dst := net.ParseIP("2.2.2.2").To4()
 		ep := make([]byte, 12)
 		ep[0] = 0x04
 		ep[1] = 0x01
 		binary.BigEndian.PutUint16(ep[2:4], 12)
-		copy(ep[4:8], src[:])
-		copy(ep[8:12], dst[:])
+		copy(ep[4:8], src)
+		copy(ep[8:12], dst)
 
 		payload = append(rp, ep...)
 		totalLen = 4 + len(payload)

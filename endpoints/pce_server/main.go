@@ -104,6 +104,48 @@ func (m *MockPceServer) Start() {
 			go m.handleConnection(conn)
 		}
 	}()
+
+	// Start a Unix domain socket listener for BGP speaker processes.
+	go func() {
+		sockPath := "/tmp/pce_bgp.sock"
+		// remove existing socket file if present
+		_ = os.Remove(sockPath)
+		ln, err := net.Listen("unix", sockPath)
+		if err != nil {
+			fmt.Printf("Error starting unix socket listener %s: %v\n", sockPath, err)
+			return
+		}
+		defer ln.Close()
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				fmt.Printf("Error accepting unix socket connection: %v\n", err)
+				continue
+			}
+			go func(conn net.Conn) {
+				defer conn.Close()
+				data, err := io.ReadAll(conn)
+				if err != nil {
+					fmt.Printf("Error reading raw BGP bytes from unix socket: %v\n", err)
+					return
+				}
+				if len(data) == 0 {
+					return
+				}
+				// Try to parse the raw bytes as a BGP message
+				if msg, err := bgp.ParseBGPMessage(data); err == nil {
+					select {
+					case m.spf.BgpUpdates <- msg:
+						fmt.Printf("Injected raw BGP-LS update from unix socket\n")
+					default:
+						fmt.Printf("BgpUpdates channel full, dropping raw BGP update\n")
+					}
+				} else {
+					fmt.Printf("Failed to parse BGP message from unix socket: %v\n", err)
+				}
+			}(c)
+		}
+	}()
 }
 
 // createPCRep creates a PCRep message with the given requestID and path SIDs.
@@ -630,7 +672,8 @@ func constructPCUpd(srpID uint32, sids []string) []byte {
 	srpObj[0] = 33   // class
 	srpObj[1] = 0x10 // type 1, flags 0
 	binary.BigEndian.PutUint16(srpObj[2:4], 12)
-	binary.BigEndian.PutUint32(srpObj[4:8], srpID)
+	binary.BigEndian.PutUint32(srpObj[4:8], 0)
+	binary.BigEndian.PutUint32(srpObj[8:12], srpID)
 
 	// LSP object
 	lspObj := make([]byte, 16)
