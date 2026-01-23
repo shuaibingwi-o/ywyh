@@ -70,3 +70,38 @@ Build and run with:
 go build ./examples/pce_server.go
 ./pce_server
 ```
+
+## Quickstart: run PCE + IPv6 PCC + BGP speaker
+
+This repository includes three runnable endpoints under `endpoints/`:
+- `endpoints/pce_server/main.go` — mock PCE server (PCEP + SPF + unix socket listener)
+- `endpoints/pcc_client/main.go` — scripted PCC client (use `--hold` to keep connection)
+- `endpoints/bgp_speaker/main.go` — builds a BGP‑LS UPDATE and writes raw bytes to `/tmp/pce_bgp.sock`
+
+Recommended sequence (use two terminals):
+
+1) Start the PCE (clears sessions on restart):
+```bash
+pkill -f endpoints/pce_server/main.go || true
+nohup go run endpoints/pce_server/main.go --sid 2001:db8::1 > /tmp/pce_server.log 2>&1 &
+tail -f /tmp/pce_server.log
+```
+
+2) In a separate terminal start a single IPv6 PCC and keep it running
+```bash
+go run endpoints/pcc_client/main.go --addr [::1]:4189 --hold
+```
+
+3) Inject a BGP‑LS update (speaker):
+```bash
+go run endpoints/bgp_speaker/main.go --sid 2001:db8::200 --non-interactive --socket /tmp/pce_bgp.sock
+```
+
+What to look for
+- `/tmp/pce_server.log`: lines like `PCUpd wire to <addr>: <hex>` and `Sent unsolicited PCUpd to <addr>...` indicate the PCE built and sent a PCUpd.
+- PCC terminal: client prints incoming PCEP messages; you should see an incoming `PCUpd` after the speaker runs.
+
+Notes
+- The PCE chooses the earliest-connected active PCC and sends the unsolicited `PCUpd` only to that session (no broadcast).
+- If the BGP parser rejects a raw message, the PCE will log the raw bytes and attempt a heuristic SID extraction to avoid losing updates during development.
+

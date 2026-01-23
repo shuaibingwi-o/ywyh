@@ -2,18 +2,33 @@ package main
 
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"net"
 	"os"
-	"time"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run pcc_client.go <pcc-addr:port>")
+	var addr string
+	var help bool
+	var hold bool
+	flag.StringVar(&addr, "addr", "", "PCC address:port (e.g. 127.0.0.1:4189)")
+	flag.BoolVar(&help, "help", false, "Show usage")
+	flag.BoolVar(&hold, "hold", false, "Keep the client connected and print incoming messages")
+	// suppress automatic usage output; only show usage on explicit errors
+	flag.Usage = func() {}
+	flag.Parse()
+	if help {
+		// do not print usage for plain help; exit quietly
+		os.Exit(0)
+	}
+	if addr == "" && flag.NArg() > 0 {
+		addr = flag.Arg(0)
+	}
+	if addr == "" {
+		printUsage()
 		os.Exit(1)
 	}
-	addr := os.Args[1]
 
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -109,47 +124,69 @@ func main() {
 	conn.Write(pcrpt)
 	fmt.Println("Sent PCRpt")
 
-	// Read PCUpd (type 10)
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	n, err = conn.Read(resp)
-	if err != nil {
-		fmt.Printf("read error waiting for PCUpd: %v\n", err)
-		return
-	}
-	msgType := resp[1]
-	fmt.Printf("Received message type=%d len=%d\n", msgType, binary.BigEndian.Uint16(resp[2:4]))
+	// Read loop: print messages; if --hold not set, read one PCUpd then exit
+	for {
+		n, err = conn.Read(resp)
+		if err != nil {
+			fmt.Printf("read error: %v\n", err)
+			break
+		}
+		if n < 4 {
+			fmt.Printf("received too-short message (%d bytes)\n", n)
+			if !hold {
+				break
+			}
+			continue
+		}
+		msgType := resp[1]
+		msgLen := int(binary.BigEndian.Uint16(resp[2:4]))
+		fmt.Printf("Received message type=%d len=%d (%d bytes read)\n", msgType, msgLen, n)
 
-	// crude parse: if ERO present, print SRv6 SID bytes
-	length := int(binary.BigEndian.Uint16(resp[3:5]))
-	offset := 4
-	for offset < length {
-		if offset+4 > length {
-			break
+		// crude parse: if ERO present, print SRv6 SID bytes
+		length := msgLen
+		if length > n {
+			length = n
 		}
-		objClass := resp[offset]
-		objLen := int(binary.BigEndian.Uint16(resp[offset+2 : offset+4]))
-		if objLen < 4 || offset+objLen > length {
-			break
-		}
-		if objClass == 7 { // ERO
-			// parse subobjects
-			sub := offset + 4
-			for sub+4 <= offset+objLen {
-				if sub+1 >= offset+objLen {
-					break
-				}
-				subType := resp[sub]
-				if subType == 0x24 && sub+20 <= offset+objLen {
-					ip := net.IP(resp[sub+6 : sub+22])
-					fmt.Printf("SRv6 SID: %s\n", ip.String())
-					sub += 20
-				} else {
-					break
+		offset := 4
+		for offset < length {
+			if offset+4 > length {
+				break
+			}
+			objClass := resp[offset]
+			objLen := int(binary.BigEndian.Uint16(resp[offset+2 : offset+4]))
+			if objLen < 4 || offset+objLen > length {
+				break
+			}
+			if objClass == 7 { // ERO
+				sub := offset + 4
+				for sub+4 <= offset+objLen {
+					if sub+1 >= offset+objLen {
+						break
+					}
+					subType := resp[sub]
+					if subType == 0x24 && sub+20 <= offset+objLen {
+						ip := net.IP(resp[sub+6 : sub+22])
+						fmt.Printf("SRv6 SID: %s\n", ip.String())
+						sub += 20
+					} else {
+						break
+					}
 				}
 			}
+			offset += objLen
 		}
-		offset += objLen
+
+		if !hold {
+			break
+		}
 	}
 
-	fmt.Println("Client done")
+	fmt.Println("Client exiting")
+}
+
+func printUsage() {
+	fmt.Fprintf(os.Stderr, "Usage: %s --addr host:port\n", os.Args[0])
+	fmt.Fprintln(os.Stderr, "Sends Open/Keepalive/PCRpt and waits for PCUpd from PCE.")
+	fmt.Fprintln(os.Stderr, "Examples:")
+	fmt.Fprintln(os.Stderr, " ", os.Args[0], "--addr 127.0.0.1:4189")
 }

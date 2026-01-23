@@ -1,3 +1,5 @@
+package main
+
 // SPDX-License-Identifier: http://www.apache.org/licenses/LICENSE-2.0
 /*
  *
@@ -7,10 +9,9 @@
  *
  */
 
-package main
-
 import (
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -35,8 +36,10 @@ type PathRequest struct {
 }
 
 type sessionState struct {
-	srpID uint32
-	sids  []string
+	srpID       uint32
+	sids        []string
+	conn        net.Conn
+	connectedAt time.Time
 }
 
 // MockPceServer simulates a PCE server for testing purposes.
@@ -137,11 +140,145 @@ func (m *MockPceServer) Start() {
 					select {
 					case m.spf.BgpUpdates <- msg:
 						fmt.Printf("Injected raw BGP-LS update from unix socket\n")
+						// After injecting BGP update into the SPF pipeline, send unsolicited PCUpd to active sessions
+						go func() {
+							// gather SIDs from LSDB
+							db := spf.GetGlobalLSDB()
+							var sids []string
+							if db != nil {
+								for _, l := range db.Links {
+									if l != nil && l.Sid != "" {
+										sids = append(sids, l.Sid)
+									}
+								}
+							}
+							// snapshot active sessions and choose the earliest-connected session (no broadcast)
+							m.mu.Lock()
+							sessions := make(map[string]sessionState, len(m.sessions))
+							for k, v := range m.sessions {
+								sessions[k] = v
+							}
+							m.mu.Unlock()
+
+							// find earliest-connected active session
+							var chosenKey string
+							var chosen sessionState
+							var earliest time.Time
+							for k, st := range sessions {
+								if st.conn == nil {
+									continue
+								}
+								if earliest.IsZero() || st.connectedAt.Before(earliest) {
+									earliest = st.connectedAt
+									chosenKey = k
+									chosen = st
+								}
+							}
+							if chosen.conn != nil {
+								srpid := chosen.srpID
+								if srpid == 0 {
+									srpid = 1
+								}
+								wire := constructPCUpd(srpid, sids)
+								if len(wire) > 0 {
+									// debug: print wire bytes
+									fmt.Printf("PCUpd wire to %s: % x\n", chosenKey, wire)
+									go func(c net.Conn, w []byte, key string, sid uint32) {
+										if _, err := c.Write(w); err != nil {
+											fmt.Printf("Error sending unsolicited PCUpd to %s: %v\n", key, err)
+										} else {
+											fmt.Printf("Sent unsolicited PCUpd to %s after BGP update (srp=%d)\n", key, sid)
+										}
+									}(chosen.conn, wire, chosenKey, srpid)
+								}
+							}
+						}()
 					default:
 						fmt.Printf("BgpUpdates channel full, dropping raw BGP update\n")
 					}
 				} else {
-					fmt.Printf("Failed to parse BGP message from unix socket: %v\n", err)
+					fmt.Printf("Failed to parse BGP message from unix socket: %v; raw=% x\n", err, data)
+					// Heuristic: try to extract any 2001:db8::/32 IPv6 addresses from the raw bytes
+					// and inject them into the LSDB so they trigger a PCUpd.
+					db := spf.GetGlobalLSDB()
+					if db == nil {
+						db = spf.NewLSDB()
+						spf.GlobalLSDB = db
+					}
+					added := false
+					for i := 0; i+16 <= len(data); i++ {
+						// look for 2001:0db8 prefix
+						if data[i] == 0x20 && data[i+1] == 0x01 && data[i+2] == 0x0d && data[i+3] == 0xb8 {
+							ipb := make([]byte, 16)
+							copy(ipb, data[i:i+16])
+							ip := net.IP(ipb)
+							if ip == nil {
+								continue
+							}
+							sidStr := ip.String()
+							// check if already present
+							exists := false
+							for _, l := range db.Links {
+								if l != nil && l.Sid == sidStr {
+									exists = true
+									break
+								}
+							}
+							if !exists {
+								db.AddLink(&spf.Link{InfId: "injected", SrcNode: 1, DstNode: 2, Sid: sidStr, Status: true, Delay: 10, Loss: 0.0})
+								fmt.Printf("Injected SID %s into LSDB from raw BGP bytes\n", sidStr)
+								added = true
+							}
+						}
+					}
+					if added {
+						// gather SIDs from LSDB and send PCUpd to earliest-connected session
+						var sids []string
+						for _, l := range db.Links {
+							if l != nil && l.Sid != "" {
+								sids = append(sids, l.Sid)
+							}
+						}
+						// snapshot active sessions
+						m.mu.Lock()
+						sessions := make(map[string]sessionState, len(m.sessions))
+						for k, v := range m.sessions {
+							sessions[k] = v
+						}
+						m.mu.Unlock()
+
+						// choose earliest-connected session
+						var chosenKey string
+						var chosen sessionState
+						var earliest time.Time
+						for k, st := range sessions {
+							if st.conn == nil {
+								continue
+							}
+							if earliest.IsZero() || st.connectedAt.Before(earliest) {
+								earliest = st.connectedAt
+								chosenKey = k
+								chosen = st
+							}
+						}
+						if chosen.conn != nil {
+							srpid := chosen.srpID
+							if srpid == 0 {
+								srpid = 1
+							}
+							wire := constructPCUpd(srpid, sids)
+							if len(wire) > 0 {
+								fmt.Printf("PCUpd wire to %s: % x\n", chosenKey, wire)
+								go func(c net.Conn, w []byte, key string, sid uint32) {
+									if _, err := c.Write(w); err != nil {
+										fmt.Printf("Error sending unsolicited PCUpd to %s: %v\n", key, err)
+									} else {
+										fmt.Printf("Sent unsolicited PCUpd to %s after BGP update (srp=%d)\n", key, sid)
+									}
+								}(chosen.conn, wire, chosenKey, srpid)
+							}
+						}
+					}
 				}
 			}(c)
 		}
@@ -291,7 +428,6 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 	var sessionID uint8
 	var openReceived bool
 	var keepaliveStarted bool
-	var pcUpdSent bool
 	for {
 		n, err := conn.Read(buf)
 		if err != nil {
@@ -348,8 +484,8 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 						fmt.Printf("Max sessions reached (%d); rejecting connection from %s\n", maxSessions, key)
 						return
 					}
-					// reserve session before replying
-					m.sessions[key] = sessionState{srpID: 0}
+					// reserve session before replying; record connection time
+					m.sessions[key] = sessionState{srpID: 0, conn: conn, connectedAt: time.Now()}
 					m.mu.Unlock()
 					openReceived = true
 					// assign a per-connection increasing session id
@@ -408,27 +544,6 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 				// reply with Keepalive (version 1, type 2, length 4)
 				ka := []byte{0x20, 0x02, 0x00, 0x04}
 				conn.Write(ka)
-				// On the first Keepalive after Open, send the unsolicited PCUpd populated from LSDB
-				if !pcUpdSent {
-					db := spf.GetGlobalLSDB()
-					var sids []string
-					if db != nil {
-						for _, l := range db.Links {
-							if l != nil && l.Sid != "" {
-								sids = append(sids, l.Sid)
-							}
-						}
-					}
-					pcupd := constructPCUpd(1, sids)
-					if len(pcupd) > 0 {
-						if _, err := conn.Write(pcupd); err != nil {
-							fmt.Printf("Error sending unsolicited PCUpd after Keepalive: %v\n", err)
-						} else {
-							fmt.Printf("Sent unsolicited PCUpd to %s after first Keepalive (srp=1)\n", conn.RemoteAddr().String())
-							pcUpdSent = true
-						}
-					}
-				}
 			} else if msgType == 3 && openReceived { // PCReq
 				fmt.Printf("Received PCEP PCReq message, length: %d\n", length)
 				// Log remote PCC address/port
@@ -499,7 +614,10 @@ func (m *MockPceServer) handlePCReq(conn net.Conn, payload []byte, sessionID uin
 	// store requestID for this connection (stateful behavior)
 	key := conn.RemoteAddr().String()
 	m.mu.Lock()
-	m.sessions[key] = sessionState{srpID: requestID}
+	st := m.sessions[key]
+	st.srpID = requestID
+	st.conn = conn
+	m.sessions[key] = st
 	m.mu.Unlock()
 
 	go func() {
@@ -522,17 +640,27 @@ func (m *MockPceServer) handlePCReq(conn net.Conn, payload []byte, sessionID uin
 // Basic example: construct a small LSDB, start the Spf pipeline,
 // send a BGP update and print the produced SRv6Paths.
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: go run pce_server.go <srv6-sid>")
-		os.Exit(1)
+	var paramSID string
+	var showHelp bool
+	flag.StringVar(&paramSID, "sid", "", "SRv6 SID to preload into the LSDB (e.g. 2001:db8::1)")
+	flag.BoolVar(&showHelp, "help", false, "Show usage")
+	// suppress automatic usage output; only show usage on explicit errors
+	flag.Usage = func() {}
+	flag.Parse()
+	if showHelp {
+		// exit quietly on explicit help; do not print usage automatically
+		os.Exit(0)
 	}
-
-	paramSID := os.Args[1]
-	// Build a minimal LSDB with a single link using the provided SID
+	if paramSID == "" && flag.NArg() > 0 {
+		paramSID = flag.Arg(0)
+	}
+	// Build a minimal LSDB with a single link using the provided SID (if any)
 	db := spf.NewLSDB()
 	db.AddNode(&spf.Node{RouterId: 1})
 	db.AddNode(&spf.Node{RouterId: 2})
-	db.AddLink(&spf.Link{InfId: "lnkA", SrcNode: 1, DstNode: 2, Sid: paramSID, Status: true, Delay: 10, Loss: 0.01})
+	if paramSID != "" {
+		db.AddLink(&spf.Link{InfId: "lnkA", SrcNode: 1, DstNode: 2, Sid: paramSID, Status: true, Delay: 10, Loss: 0.01})
+	}
 	db.AddLink(&spf.Link{InfId: "lnkB", SrcNode: 2, DstNode: 1, Sid: "2001:db8::2", Status: true, Delay: 10, Loss: 0.01})
 	spf.GlobalLSDB = db
 
