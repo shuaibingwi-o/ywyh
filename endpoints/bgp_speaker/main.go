@@ -100,39 +100,24 @@ func constructBGPLSUpdate(srv6SID, localRID, remoteRID string) *bgp.BGPMessage {
 		Asn:         65000,
 		BGPRouterID: netip.MustParseAddr(localRID),
 	}
-	remoteDesc := &bgp.LsNodeDescriptor{
-		Asn:         65000,
-		BGPRouterID: netip.MustParseAddr(remoteRID),
-	}
 	localNodeTLV := bgp.NewLsTLVNodeDescriptor(localDesc, bgp.LS_TLV_LOCAL_NODE_DESC)
-	remoteNodeTLV := bgp.NewLsTLVNodeDescriptor(remoteDesc, bgp.LS_TLV_REMOTE_NODE_DESC)
-	linkNLRI := &bgp.LsLinkNLRI{
-		LocalNodeDesc:  &localNodeTLV,
-		RemoteNodeDesc: &remoteNodeTLV,
-		LinkDesc:       []bgp.LsTLVInterface{},
-	}
-
-	// Build SRv6 End.X SID TLV using constructor to ensure Length is set
-	lsSrv6 := &bgp.LsSrv6EndXSID{
-		EndpointBehavior: 0x11,
-		Flags:            0,
-		Algorithm:        0,
-		Weight:           0,
-		Reserved:         0,
-		SIDs:             []netip.Addr{netip.MustParseAddr(srv6SID)},
-	}
-	lsSrv6TLV := bgp.NewLsTLVSrv6EndXSID(lsSrv6)
-	if lsSrv6TLV != nil {
-		linkNLRI.LinkDesc = append(linkNLRI.LinkDesc, lsSrv6TLV)
+	// For SPF parser compatibility, advertise a Node NLRI with a LocalNodeDescriptor.
+	// `ApplyBGPUpdateToLSDB` recognizes node NLRI and will register the node in the LSDB.
+	nodeNLRI := &bgp.LsNodeNLRI{
+		LocalNodeDesc: &localNodeTLV,
 	}
 	lsAddrPrefix := &bgp.LsAddrPrefix{
-		Type: bgp.LS_NLRI_TYPE_LINK,
-		NLRI: linkNLRI,
+		Type: bgp.LS_NLRI_TYPE_NODE,
+		NLRI: nodeNLRI,
 	}
 
-	// Use MP_REACH_NLRI attribute for BGP-LS NLRI to ensure parser compatibility.
-	mpAttrs := []bgp.PathNLRI{{NLRI: lsAddrPrefix}}
-	// Use RF_LS family and set next-hop to local router ID
-	attr, _ := bgp.NewPathAttributeMpReachNLRI(bgp.RF_LS, mpAttrs, netip.MustParseAddr(localRID))
+	// Place the LS NLRI inside an MP_REACH_NLRI (AFI=LS, SAFI=LS)
+	nlris := []bgp.PathNLRI{{NLRI: lsAddrPrefix}}
+	nextHop := netip.MustParseAddr(localRID)
+	attr, err := bgp.NewPathAttributeMpReachNLRI(bgp.RF_LS, nlris, nextHop)
+	if err != nil {
+		fmt.Printf("failed to construct MP_REACH_NLRI: %v\n", err)
+		os.Exit(1)
+	}
 	return bgp.NewBGPUpdateMessage(nil, []bgp.PathAttributeInterface{attr}, nil)
 }

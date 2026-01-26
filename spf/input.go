@@ -10,8 +10,10 @@
 package spf
 
 import (
+	"encoding/binary"
 	"fmt"
 	"hash/fnv"
+	"reflect"
 	"strconv"
 
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
@@ -31,13 +33,35 @@ func ApplyBGPUpdateToLSDB(m *bgp.BGPMessage) bool {
 	// If this is a BGP UPDATE, try to parse BGP-LS NLRI entries directly
 	if upd, ok := m.Body.(*bgp.BGPUpdate); ok {
 		fmt.Println("Processing BGP UPDATE")
+		fmt.Printf("BGPUpdate: NLRI count=%d, PathAttributes=%d\n", len(upd.NLRI), len(upd.PathAttributes))
+		for i, pa := range upd.PathAttributes {
+			fmt.Printf(" PathAttr[%d] type=%T\n", i, pa)
+			if _, ok := pa.(*bgp.PathAttributeMpReachNLRI); ok {
+				fmt.Printf("  PathAttr is MP_REACH_NLRI\n")
+				fmt.Printf("  MP_REACH struct dump: %#v\n", pa)
+			}
+		}
 		changed := false
-		// Process direct NLRI
+		// Process NLRI carried directly in the Update
 		for _, nlri := range upd.NLRI {
 			switch n := nlri.NLRI.(type) {
 			case *bgp.LsAddrPrefix:
 				fmt.Printf("Processing LS NLRI type: %d\n", n.Type)
 				changed = changed || processLSNLRI(n)
+			}
+		}
+
+		// Also process NLRI carried inside MP_REACH_NLRI path attributes
+		for _, pa := range upd.PathAttributes {
+			if mp, ok := pa.(*bgp.PathAttributeMpReachNLRI); ok {
+				fmt.Printf("Processing MP_REACH NLRI (AFI=0x%x, SAFI=0x%x) entries=%d\n", mp.AFI, mp.SAFI, len(mp.Value))
+				for _, p := range mp.Value {
+					switch n := p.NLRI.(type) {
+					case *bgp.LsAddrPrefix:
+						fmt.Printf("Processing LS NLRI (mp_reach) type: %d\n", n.Type)
+						changed = changed || processLSNLRI(n)
+					}
+				}
 			}
 		}
 		if changed {
@@ -59,18 +83,57 @@ func processLSNLRI(lp *bgp.LsAddrPrefix) bool {
 				if desc, ok := nodeNLRI.LocalNodeDesc.(*bgp.LsTLVNodeDescriptor); ok {
 					nd := desc.Extract()
 					var locator string
+					var id uint32
 					if nd.BGPRouterID.IsValid() {
 						locator = nd.BGPRouterID.String()
+						// if the router ID is IPv4, use its numeric value as node id
+						if nd.BGPRouterID.Is4() {
+							b := nd.BGPRouterID.AsSlice()
+							if len(b) == 4 {
+								id = binary.BigEndian.Uint32(b)
+							}
+						}
 					} else if nd.IGPRouterID != "" {
 						locator = nd.IGPRouterID
 					} else {
 						locator = fmt.Sprintf("as-%d-id-%d", nd.Asn, nd.BGPLsID)
 					}
-					h := fnv.New32a()
-					h.Write([]byte(locator))
-					id := h.Sum32()
+					// fallback to hash if no numeric id derived
+					if id == 0 {
+						h := fnv.New32a()
+						h.Write([]byte(locator))
+						id = h.Sum32()
+					}
 					node := &Node{RouterId: id, Locator: locator, AsNum: nd.Asn}
 					GlobalLSDB.AddNode(node)
+
+					// Debug: try to extract TLV contents from the descriptor if available
+					if LogBGPUpdates {
+						fmt.Printf("Node NLRI extract: %#v\n", nd)
+						// reflectively call GetLsTLV() if present
+						rv := reflect.ValueOf(desc)
+						m := rv.MethodByName("GetLsTLV")
+						if m.IsValid() {
+							res := m.Call(nil)
+							if len(res) > 0 {
+								rv0 := res[0]
+								if rv0.IsValid() {
+									switch rv0.Kind() {
+									case reflect.Ptr, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+										if !rv0.IsNil() {
+											tlv := rv0.Interface()
+											fmt.Printf("Node descriptor TLV: %T %#v\n", tlv, tlv)
+										}
+									default:
+										// non-nil value (struct, basic types, etc.)
+										tlv := rv0.Interface()
+										fmt.Printf("Node descriptor TLV: %T %#v\n", tlv, tlv)
+									}
+								}
+							}
+						}
+					}
+
 					// If this NLRI carries a BGPLsID, register it
 					// as the SRP identifier for this BGP message so
 					// downstream packaging can use it.

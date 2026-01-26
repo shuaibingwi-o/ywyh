@@ -12,7 +12,7 @@ func main() {
 	var addr string
 	var help bool
 	var hold bool
-	flag.StringVar(&addr, "addr", "", "PCC address:port (e.g. 127.0.0.1:4189)")
+	flag.StringVar(&addr, "addr", "[::1]:4189", "PCC address:port (e.g. [::1]:4189)")
 	flag.BoolVar(&help, "help", false, "Show usage")
 	flag.BoolVar(&hold, "hold", false, "Keep the client connected and print incoming messages")
 	// suppress automatic usage output; only show usage on explicit errors
@@ -188,5 +188,5 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s --addr host:port\n", os.Args[0])
 	fmt.Fprintln(os.Stderr, "Sends Open/Keepalive/PCRpt and waits for PCUpd from PCE.")
 	fmt.Fprintln(os.Stderr, "Examples:")
-	fmt.Fprintln(os.Stderr, " ", os.Args[0], "--addr 127.0.0.1:4189")
+	fmt.Fprintln(os.Stderr, " ", os.Args[0], "--addr [::1]:4189")
 }

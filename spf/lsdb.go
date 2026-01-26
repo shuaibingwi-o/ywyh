@@ -18,6 +18,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -656,4 +657,29 @@ func (db *LSDB) GetNetworkStats() map[string]interface{} {
 	}
 
 	return stats
+}
+
+// DumpGlobalLSDB returns a textual snapshot of the GlobalLSDB contents.
+func DumpGlobalLSDB() string {
+	db := GetGlobalLSDB()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var sb strings.Builder
+	sb.WriteString("LSDB Snapshot:\n")
+	sb.WriteString("Nodes:\n")
+	for id, n := range db.Nodes {
+		sb.WriteString(fmt.Sprintf("  %d: locator=%s as=%d msd=%d sids=%v\n", id, n.Locator, n.AsNum, n.Msd, n.SRv6SIDs))
+	}
+	sb.WriteString("Links:\n")
+	for id, l := range db.Links {
+		sb.WriteString(fmt.Sprintf("  %s: src=%d dst=%d sid=%s status=%v delay=%.2f loss=%.4f\n", id, l.SrcNode, l.DstNode, l.Sid, l.Status, l.Delay, l.Loss))
+	}
+	sb.WriteString("Topology:\n")
+	for src, targets := range db.Topology {
+		for dst, lid := range targets {
+			sb.WriteString(fmt.Sprintf("  %d -> %d via %s\n", src, dst, lid))
+		}
+	}
+	return sb.String()
 }

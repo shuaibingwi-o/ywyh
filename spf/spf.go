@@ -13,7 +13,6 @@ import (
 	"context"
 	"os"
 
-	"github.com/nttcom/pola/pkg/packet/pcep"
 	"github.com/osrg/gobgp/v4/pkg/packet/bgp"
 )
 
@@ -23,16 +22,24 @@ type SessionInfo struct {
 	RequestID uint32
 }
 
+// End of SessionInfo struct
+
 // Spf holds the pipeline channels and context.
 type Spf struct {
 	ctx                context.Context
 	cancel             context.CancelFunc
 	BgpUpdates         chan *bgp.BGPMessage
-	SrPaths            chan *pcep.PCUpdMessage
+	SrPaths            chan []PathUpdate
 	CurrentSessionInfo SessionInfo
 	nextSrpIDs         map[uint8]uint32
 	previousPaths      map[string]*PathResult // key: src-dst, value: previous path
 }
+
+// Logging toggles (can be set by consumers)
+var (
+	LogBGPUpdates = true
+	LogPCUpdMsgs  = true
+)
 
 // NewSpf creates a new Spf instance with provided buffer sizes.
 func NewSpf(bufIn, bufOut int) *Spf {
@@ -41,7 +48,7 @@ func NewSpf(bufIn, bufOut int) *Spf {
 		ctx:                ctx,
 		cancel:             cancel,
 		BgpUpdates:         make(chan *bgp.BGPMessage, bufIn),
-		SrPaths:            make(chan *pcep.PCUpdMessage, bufOut),
+		SrPaths:            make(chan []PathUpdate, bufOut),
 		CurrentSessionInfo: SessionInfo{},
 		nextSrpIDs:         make(map[uint8]uint32),
 		previousPaths:      make(map[string]*PathResult),
@@ -75,18 +82,14 @@ func (s *Spf) eventLoop() {
 			if !ok {
 				return
 			}
-			// First, apply the BGP update to the LSDB. If the update
-			// did not modify the LSDB, skip PCUpd construction and
-			// avoid sending a message to consumers.
 			changed := ApplyBGPUpdateToLSDB(m)
 			if !changed {
-				// Skip sending any PCUpd when the LSDB was not modified.
 				continue
 			}
-			pcMsgs := PackPCUpd(s, m)
-			for _, pcMsg := range pcMsgs {
+			updates := PackPCUpd(s, m)
+			if len(updates) > 0 {
 				select {
-				case s.SrPaths <- pcMsg:
+				case s.SrPaths <- updates:
 				case <-s.ctx.Done():
 					return
 				}
