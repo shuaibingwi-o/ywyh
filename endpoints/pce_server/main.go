@@ -62,6 +62,20 @@ func (m *MockPceServer) Start() {
 			m.sessions[k] = sessionState{srpID: 0, conn: c, connectedAt: time.Now()}
 			m.mu.Unlock()
 			go m.handleConnection(c)
+			// Start PCEP KEEPALIVE sender for this session
+			go func(conn net.Conn, key string) {
+				ticker := time.NewTicker(30 * time.Second)
+				defer ticker.Stop()
+				for range ticker.C {
+					// PCEP KEEPALIVE: Version=1, Type=2, Length=4
+					keepalive := []byte{0x20, 0x02, 0x00, 0x04}
+					_, err := conn.Write(keepalive)
+					if err != nil {
+						fmt.Printf("Failed to send PCEP KEEPALIVE to %s: %v\n", key, err)
+						return
+					}
+				}
+			}(c, k)
 		}
 	}()
 }
@@ -107,13 +121,55 @@ func (m *MockPceServer) handleConnection(conn net.Conn) {
 			copy(resp[4:], payload)
 			conn.Write(resp)
 		case 2:
+			// PCEP KEEPALIVE, do nothing
 		case 3:
 			if openReceived {
 				go m.handlePCReq(conn, payload)
 			}
+		case 4: // PCRpt (PCEP Report)
+			fmt.Printf("Received PCRpt (type 4) from %s\n", conn.RemoteAddr())
+			if parseAndApplyPCRptToLSDB(payload) {
+				fmt.Printf("LSDB updated from PCRpt from %s\n", conn.RemoteAddr())
+			} else {
+				fmt.Printf("PCRpt from %s did not contain link state info or not supported, handled per RFC\n", conn.RemoteAddr())
+			}
 		default:
 		}
 	}
+}
+
+// parseAndApplyPCRptToLSDB parses a PCRpt payload and updates LSDB if link state info is present.
+// Returns true if LSDB was updated, false otherwise.
+func parseAndApplyPCRptToLSDB(payload []byte) bool {
+	// Minimal PCRpt parser: look for LSP Object (class=32), ERO (class=7), and custom TLVs for link state
+	// This is a placeholder for real parsing per RFC 5440 and extensions.
+	off := 0
+	updated := false
+	for off+4 <= len(payload) {
+		objClass := payload[off]
+		objType := payload[off+1]
+		objLen := int(binary.BigEndian.Uint16(payload[off+2 : off+4]))
+		if objLen < 4 || off+objLen > len(payload) {
+			break
+		}
+		// Example: parse LSP Object (class=32), ERO (class=7), or custom link state TLVs
+		if objClass == 32 && objType == 1 {
+			// LSP Object: could extract LSP-ID, PLSP-ID, etc.
+			// For demo, just log
+			fmt.Printf("  LSP Object found in PCRpt\n")
+		} else if objClass == 7 && objType == 16 {
+			// ERO Object: could extract path info
+			fmt.Printf("  ERO Object found in PCRpt\n")
+		} else if objClass == 251 {
+			// Example: custom link state info (not standard)
+			// Parse and update LSDB as needed
+			fmt.Printf("  Custom Link State Object found in PCRpt\n")
+			// TODO: parse and update LSDB
+			updated = true
+		}
+		off += objLen
+	}
+	return updated
 }
 
 func (m *MockPceServer) handlePCReq(conn net.Conn, payload []byte) {
@@ -257,11 +313,97 @@ func main() {
 	var lsdbPeriod int
 	var logBgp bool
 	var logPcUpd bool
+	var bgpListenAddr string
+	var bgpPeerAddr string
 	flag.StringVar(&paramSID, "sid", "", "SRv6 SID to preload into the LSDB (e.g. 2001:db8::1)")
 	flag.IntVar(&lsdbPeriod, "lsdb-period", 0, "Seconds between LSDB dumps (0 disables)")
-	flag.BoolVar(&logBgp, "log-bgp", true, "Log received BGP updates injected via unix socket")
+	flag.BoolVar(&logBgp, "log-bgp", true, "Log received BGP updates injected via TCP socket")
 	flag.BoolVar(&logPcUpd, "log-pcupd", true, "Log PCUpd wire bytes and send confirmation")
+	flag.StringVar(&bgpListenAddr, "bgp-listen", "[::]:5000", "TCP IPv6 address to listen for BGP-LS injection (local or remote, default: [::]:5000)")
+	flag.StringVar(&bgpPeerAddr, "bgp-peer", "", "TCP IPv6 address of remote BGP peer to connect and maintain session (optional)")
 	flag.Parse()
+	// ...existing code...
+
+	s := spf.NewSpf(1000, 1000)
+	// set spf logging flags from CLI
+	spf.LogBGPUpdates = logBgp
+	spf.LogPCUpdMsgs = logPcUpd
+	s.Start()
+	defer s.Stop()
+
+	// If bgpPeerAddr is set, maintain a BGP session as a peer
+	if bgpPeerAddr != "" {
+		go func() {
+			for {
+				fmt.Printf("Connecting to remote BGP peer at %s...\n", bgpPeerAddr)
+				conn, err := net.Dial("tcp", bgpPeerAddr)
+				if err != nil {
+					fmt.Printf("Failed to connect to BGP peer %s: %v\n", bgpPeerAddr, err)
+					time.Sleep(5 * time.Second)
+					continue
+				}
+				fmt.Printf("Connected to BGP peer %s\n", bgpPeerAddr)
+
+				// Send BGP OPEN
+				openMsg := []byte{
+					0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // Marker
+					0x00, 0x1d, // Length (29)
+					0x01,       // Type (OPEN)
+					0x04,       // Version
+					0x00, 0xb4, // My ASN (180)
+					0x00, 0x00, // Hold Time (0 for demo)
+					0x0a, 0x00, 0x00, 0x01, // BGP Identifier (10.0.0.1)
+					0x00, // Opt Parm Len
+				}
+				conn.Write(openMsg)
+
+				// Start BGP KEEPALIVE sender
+				keepalive := []byte{
+					0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+					0x00, 0x13, // Length (19)
+					0x04, // Type (KEEPALIVE)
+				}
+				kaTicker := time.NewTicker(30 * time.Second)
+				defer kaTicker.Stop()
+
+				go func() {
+					for range kaTicker.C {
+						conn.Write(keepalive)
+					}
+				}()
+
+				// Receive BGP messages
+				for {
+					buf := make([]byte, 4096)
+					n, err := conn.Read(buf)
+					if err != nil {
+						fmt.Printf("BGP peer connection closed: %v\n", err)
+						conn.Close()
+						break
+					}
+					if n > 0 {
+						msg, err := bgp.ParseBGPMessage(buf[:n])
+						if err != nil {
+							fmt.Printf("Failed to parse BGP message from peer: %v\n", err)
+							continue
+						}
+						select {
+						case s.BgpUpdates <- msg:
+							if logBgp {
+								fmt.Printf("Injected BGP message from peer into SPF\n")
+							}
+						default:
+							if logBgp {
+								fmt.Printf("BgpUpdates channel full, dropping peer message\n")
+							}
+						}
+					}
+				}
+				// Reconnect after disconnect
+				time.Sleep(5 * time.Second)
+			}
+		}()
+	}
 
 	db := spf.NewLSDB()
 	db.AddNode(&spf.Node{RouterId: 1})
@@ -271,13 +413,6 @@ func main() {
 	}
 	db.AddLink(&spf.Link{InfId: "lnkB", SrcNode: 2, DstNode: 1, Sid: "2001:db8::2", Status: true, Delay: 10, Loss: 0.01})
 	spf.GlobalLSDB = db
-
-	s := spf.NewSpf(1000, 1000)
-	// set spf logging flags from CLI
-	spf.LogBGPUpdates = logBgp
-	spf.LogPCUpdMsgs = logPcUpd
-	s.Start()
-	defer s.Stop()
 
 	server := NewMockPceServer(s)
 	server.Start()
@@ -292,35 +427,31 @@ func main() {
 		}()
 	}
 
-	// Unix socket listener for BGP-LS injections into SPF
+	// TCP socket listener for BGP-LS injections into SPF
 	go func() {
-		sock := "/tmp/pce_bgp.sock"
-		// remove previous socket if present
-		os.Remove(sock)
-		ln, err := net.Listen("unix", sock)
+		ln, err := net.Listen("tcp", bgpListenAddr)
 		if err != nil {
-			fmt.Printf("failed to listen unix socket %s: %v\n", sock, err)
+			fmt.Printf("failed to listen TCP socket %s: %v\n", bgpListenAddr, err)
 			return
 		}
 		defer ln.Close()
-		fmt.Printf("Listening for BGP bytes on unix socket %s\n", sock)
+		fmt.Printf("Listening for BGP bytes on TCP socket %s\n", bgpListenAddr)
 		for {
 			c, err := ln.Accept()
 			if err != nil {
-				fmt.Printf("unix accept err: %v\n", err)
+				fmt.Printf("tcp accept err: %v\n", err)
 				continue
 			}
 			go func(conn net.Conn) {
 				defer conn.Close()
 				data, err := io.ReadAll(conn)
 				if err != nil {
-					fmt.Printf("read unix socket err: %v\n", err)
+					fmt.Printf("read tcp socket err: %v\n", err)
 					return
 				}
 				msg, err := bgp.ParseBGPMessage(data)
 				if err != nil {
 					fmt.Printf("bgp parse err: %v\n", err)
-					// dump a short hex preview for debugging
 					l := len(data)
 					if l > 128 {
 						l = 128

@@ -13,13 +13,13 @@ import (
 )
 
 func main() {
-	var sock string
+	var tcpAddr string
 	var sid string
 	var local string
 	var remote string
 	var nonInteractive bool
 
-	flag.StringVar(&sock, "socket", "/tmp/pce_bgp.sock", "Unix socket path to send raw BGP bytes to")
+	flag.StringVar(&tcpAddr, "tcp", "[::1]:179", "TCP IPv6 address to send BGP-LS bytes to (default: [::1]:179)")
 	flag.StringVar(&sid, "sid", "", "SRv6 SID to advertise (e.g. 2001:db8::200)")
 	flag.StringVar(&local, "local", "1.1.1.1", "Local router ID")
 	flag.StringVar(&remote, "remote", "2.2.2.2", "Remote router ID")
@@ -31,11 +31,11 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 	if !nonInteractive {
 		// interactive prompts
-		fmt.Print("Unix socket path (/tmp/pce_bgp.sock): ")
+		fmt.Print("TCP IPv6 address ([::1]:179): ")
 		s, _ := reader.ReadString('\n')
 		s = strings.TrimSpace(s)
 		if s != "" {
-			sock = s
+			tcpAddr = s
 		}
 
 		fmt.Print("SRv6 SID to advertise (e.g. 2001:db8::200): ")
@@ -64,7 +64,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("About to send BGP-LS update to %s with SID=%s, local=%s, remote=%s\n", sock, sid, local, remote)
+	fmt.Printf("About to send BGP-LS update to %s with SID=%s, local=%s, remote=%s\n", tcpAddr, sid, local, remote)
 
 	msg := constructBGPLSUpdate(sid, local, remote)
 	data, err := msg.Serialize()
@@ -73,23 +73,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	c, err := net.Dial("unix", sock)
+	c, err := net.Dial("tcp", tcpAddr)
 	if err != nil {
-		fmt.Printf("Failed to connect to unix socket %s: %v\n", sock, err)
+		fmt.Printf("Failed to connect to TCP socket %s: %v\n", tcpAddr, err)
 		os.Exit(1)
 	}
 	defer c.Close()
 
 	_, err = c.Write(data)
 	if err != nil {
-		fmt.Printf("Failed to write to unix socket: %v\n", err)
+		fmt.Printf("Failed to write to TCP socket: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Sent BGP-LS update (%d bytes) to %s\n", len(data), sock)
+	fmt.Printf("Sent BGP-LS update (%d bytes) to %s\n", len(data), tcpAddr)
 }
 
 func printUsage() {
-	fmt.Fprintf(os.Stderr, "Usage: %s [--socket path] [--sid SID] [--local RID] [--remote RID] [--non-interactive]\n", os.Args[0])
+	fmt.Fprintf(os.Stderr, "Usage: %s [--tcp addr] [--sid SID] [--local RID] [--remote RID] [--non-interactive]\n", os.Args[0])
 	fmt.Fprintln(os.Stderr, "If --non-interactive is not set, the program will prompt for values.")
 	fmt.Fprintln(os.Stderr, "Examples:")
 	fmt.Fprintln(os.Stderr, "  ", os.Args[0], "--sid 2001:db8::200 --non-interactive")
