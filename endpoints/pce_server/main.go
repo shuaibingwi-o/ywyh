@@ -16,6 +16,53 @@ import (
 	"ywyh/spf"
 )
 
+// constructPCInit creates a PCEP Initiate (PCInit, type 9) message for a new LSP
+func constructPCInit(srpID uint32, sids []string) []byte {
+	// This is a minimal PCInit message: Version=1, Type=9, Length, SRP, LSP, ERO
+	srpObj := make([]byte, 12)
+	srpObj[0] = 33
+	srpObj[1] = 0x10
+	binary.BigEndian.PutUint16(srpObj[2:4], 12)
+	binary.BigEndian.PutUint32(srpObj[4:8], 0)
+	binary.BigEndian.PutUint32(srpObj[8:12], srpID)
+
+	lspObj := make([]byte, 16)
+	lspObj[0] = 32
+	lspObj[1] = 0x10
+	binary.BigEndian.PutUint16(lspObj[2:4], 16)
+	lspObj[4] = 0
+	binary.BigEndian.PutUint16(lspObj[5:7], 1)
+
+	eroLen := 4 + 22*len(sids)
+	eroObj := make([]byte, eroLen)
+	eroObj[0] = 7
+	eroObj[1] = 16
+	binary.BigEndian.PutUint16(eroObj[2:4], uint16(eroLen))
+	off := 4
+	for _, sid := range sids {
+		if a, err := netip.ParseAddr(sid); err == nil && a.Is6() {
+			eroObj[off] = 0x24
+			eroObj[off+1] = 22
+			eroObj[off+2] = 0
+			eroObj[off+3] = 0x11
+			binary.BigEndian.PutUint16(eroObj[off+4:off+6], 0)
+			copy(eroObj[off+6:off+22], a.AsSlice())
+			off += 22
+		}
+	}
+
+	total := 4 + len(srpObj) + len(lspObj) + len(eroObj)
+	buf := make([]byte, total)
+	buf[0] = 0x20
+	buf[1] = 0x0c // PCInit (type 12)
+	binary.BigEndian.PutUint16(buf[2:4], uint16(total))
+	copy(buf[4:], srpObj)
+	copy(buf[4+len(srpObj):], lspObj)
+
+	copy(buf[4+len(srpObj)+len(lspObj):], eroObj)
+	return buf
+	}
+
 type sessionState struct {
 	srpID       uint32
 	sids        []string
@@ -473,60 +520,72 @@ func main() {
 		}
 	}()
 
-	go func() {
-		for updates := range s.SrPaths {
-			if len(updates) == 0 {
-				continue
-			}
-			server.mu.Lock()
-			sessions := make(map[string]sessionState, len(server.sessions))
-			for k, v := range server.sessions {
-				sessions[k] = v
-			}
-			server.mu.Unlock()
-
-			var chosenKey string
-			var chosen sessionState
-			var earliest time.Time
-			for k, st := range sessions {
-				if st.conn == nil {
+		go func() {
+			// Track which LSPs have been initiated: key is src-dst string
+			initiatedLSPs := make(map[string]bool)
+			for updates := range s.SrPaths {
+				if len(updates) == 0 {
 					continue
 				}
-				if ra, ok := st.conn.RemoteAddr().(*net.TCPAddr); ok {
-					if ra.IP == nil || ra.IP.To4() != nil {
+				server.mu.Lock()
+				sessions := make(map[string]sessionState, len(server.sessions))
+				for k, v := range server.sessions {
+					sessions[k] = v
+				}
+				server.mu.Unlock()
+
+				var chosenKey string
+				var chosen sessionState
+				var earliest time.Time
+				for k, st := range sessions {
+					if st.conn == nil {
 						continue
 					}
-				}
-				if earliest.IsZero() || st.connectedAt.Before(earliest) {
-					earliest = st.connectedAt
-					chosenKey = k
-					chosen = st
-				}
-			}
-			for _, upd := range updates {
-				srpID := uint32(1) // or use a better SRP ID allocation if needed
-				if chosen.conn != nil && len(upd.SIDs) > 0 {
-					wire := constructPCUpd(srpID, upd.SIDs)
-					if len(wire) > 0 {
-						if logPcUpd {
-							fmt.Printf("[SPF->PCUpd] PCUpd wire to %s: % x\n", chosenKey, wire)
+					if ra, ok := st.conn.RemoteAddr().(*net.TCPAddr); ok {
+						if ra.IP == nil || ra.IP.To4() != nil {
+							continue
 						}
-						go func(c net.Conn, w []byte, key string, id uint32) {
-							if _, err := c.Write(w); err != nil {
-								if logPcUpd {
-									fmt.Printf("Error sending PCUpd to %s: %v\n", key, err)
-								}
-							} else {
-								if logPcUpd {
-									fmt.Printf("Sent PCUpd to %s from SPF (srp=%d)\n", key, id)
-								}
+					}
+					if earliest.IsZero() || st.connectedAt.Before(earliest) {
+						earliest = st.connectedAt
+						chosenKey = k
+						chosen = st
+					}
+				}
+				for _, upd := range updates {
+					srpID := uint32(1) // or use a better SRP ID allocation if needed
+					lspKey := fmt.Sprintf("%d-%d", upd.Src, upd.Dst)
+					if chosen.conn != nil && len(upd.SIDs) > 0 {
+						var wire []byte
+						var msgType string
+						if !initiatedLSPs[lspKey] {
+							wire = constructPCInit(srpID, upd.SIDs)
+							msgType = "PCInit"
+							initiatedLSPs[lspKey] = true
+						} else {
+							wire = constructPCUpd(srpID, upd.SIDs)
+							msgType = "PCUpd"
+						}
+						if len(wire) > 0 {
+							if logPcUpd {
+								fmt.Printf("[SPF->%s] %s wire to %s: % x\n", msgType, msgType, chosenKey, wire)
 							}
-						}(chosen.conn, wire, chosenKey, srpID)
+							go func(c net.Conn, w []byte, key string, id uint32, mtype string) {
+								if _, err := c.Write(w); err != nil {
+									if logPcUpd {
+										fmt.Printf("Error sending %s to %s: %v\n", mtype, key, err)
+									}
+								} else {
+									if logPcUpd {
+										fmt.Printf("Sent %s to %s from SPF (srp=%d)\n", mtype, key, id)
+									}
+								}
+							}(chosen.conn, wire, chosenKey, srpID, msgType)
+						}
 					}
 				}
 			}
-		}
-	}()
+		}()
 
 	fmt.Println("Mock PCE server started on :4189")
 	select {}
